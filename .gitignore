@@ -44,3 +44,11 @@ downloads/
 
 # Dev server runtime (started by AI helper)
 .run/
+
+# Local Flutter toolchain and generated caches
+.tooling/
+.dart_tool/
+.flutter-plugins-dependencies
+**/android/local.properties
+**/android/.gradle/
+**/windows/flutter/ephemeral/
