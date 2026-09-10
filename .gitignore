@@ -34,6 +34,9 @@ Thumbs.db
 
 # Local data (本地优先应用运行时数据，绝不入库)
 data/
+# Flutter's data layer is source code, not runtime data.
+!/apps/flutter/lib/data/
+!/apps/flutter/lib/data/*.dart
 *.db
 *.sqlite
 *.sqlite-journal

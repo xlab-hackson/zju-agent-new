@@ -9,6 +9,7 @@ import '../application/services.dart';
 import '../application/llm.dart';
 import '../domain/models.dart';
 import '../platform/save_file.dart';
+import '../platform/operation_error.dart';
 import 'theme.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -32,6 +33,7 @@ class _SettingsPageState extends State<SettingsPage> {
   Json app = {};
   List<Json> providers = [];
   int selected = 0;
+  String operationStage = '操作';
   @override
   void initState() {
     super.initState();
@@ -39,19 +41,28 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> load() async {
-    final settings = await widget.services.db.get('settings', 'app') ?? {},
-        campus = await widget.services.secrets.read('campus'),
-        saved = await widget.services.secrets.read('providers');
-    if (!mounted) return;
-    setState(() {
-      app = settings;
-      nickname.text = text(app, 'nickname');
-      persona.text = text(app, 'personaPrompt');
-      username.text = text(campus ?? {}, 'username');
-      providers = rows(saved?['items'] ?? []);
-      if (providers.isNotEmpty) selectProvider(0);
-      loaded = true;
-    });
+    try {
+      final settings = await widget.services.db.get('settings', 'app') ?? {},
+          campus = await widget.services.secrets.read('campus'),
+          saved = await widget.services.secrets.read('providers');
+      if (!mounted) return;
+      setState(() {
+        app = settings;
+        nickname.text = text(app, 'nickname');
+        persona.text = text(app, 'personaPrompt');
+        username.text = text(campus ?? {}, 'username');
+        providers = rows(saved?['items'] ?? []);
+        if (providers.isNotEmpty) selectProvider(0);
+        loaded = true;
+      });
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          loaded = true;
+          message = operationError(e, '读取设置');
+        });
+      }
+    }
   }
 
   void selectProvider(int index) {
@@ -75,13 +86,14 @@ class _SettingsPageState extends State<SettingsPage> {
     setState(() {
       busy = true;
       message = '';
+      operationStage = '操作';
     });
     try {
       await action();
       if (mounted) setState(() => message = '已完成。');
     } catch (e) {
       if (mounted) {
-        setState(() => message = e is AppError ? e.message : '操作失败，请检查文件或配置。');
+        setState(() => message = operationError(e, operationStage));
       }
     } finally {
       if (mounted) setState(() => busy = false);
@@ -133,6 +145,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     onPressed: busy
                         ? null
                         : () => perform(() async {
+                            operationStage = '读取已保存的校园凭据';
                             final old = await widget.services.secrets.read(
                               'campus',
                             );
@@ -145,13 +158,16 @@ class _SettingsPageState extends State<SettingsPage> {
                                 '请输入学号与密码。',
                               );
                             }
+                            operationStage = '清理旧登录会话与缓存';
                             await widget.services.logout();
+                            operationStage = '安全保存校园凭据';
                             await widget.services.secrets.write('campus', {
                               'username': username.text.trim(),
                               'password': pass,
                             });
-                            password.clear();
+                            operationStage = '连接统一身份认证';
                             await widget.services.campus.session.ensure('cas');
+                            password.clear();
                           }),
                     child: const Text('保存并验证'),
                   ),
@@ -316,13 +332,11 @@ class _SettingsPageState extends State<SettingsPage> {
                     onPressed: busy
                         ? null
                         : () => perform(() async {
-                            final picked = await FilePicker.platform.pickFiles(
+                            final picked = await FilePicker.pickFile(
                               type: FileType.image,
-                              withData: true,
                             );
                             if (picked == null) return;
-                            final bytes = picked.files.single.bytes;
-                            if (bytes == null) return;
+                            final bytes = await picked.readAsBytes();
                             final codec = await ui.instantiateImageCodec(
                               bytes,
                               targetWidth: 256,
@@ -393,7 +407,10 @@ class _SettingsPageState extends State<SettingsPage> {
                         : () => perform(() async {
                             final bytes = await widget.services.backups
                                 .export();
-                            await saveBytes('zju-agent-backup.zip',Uint8List.fromList(bytes));
+                            await saveBytes(
+                              'zju-agent-backup.zip',
+                              Uint8List.fromList(bytes),
+                            );
                           }),
                     child: const Text('导出备份（含文件）'),
                   ),
@@ -401,14 +418,13 @@ class _SettingsPageState extends State<SettingsPage> {
                     onPressed: busy
                         ? null
                         : () => perform(() async {
-                            final picked = await FilePicker.platform.pickFiles(
+                            final picked = await FilePicker.pickFile(
                               type: FileType.custom,
                               allowedExtensions: ['zip'],
-                              withData: true,
                             );
                             if (picked != null) {
                               await widget.services.backups.restore(
-                                picked.files.single.bytes!,
+                                await picked.readAsBytes(),
                               );
                               await load();
                             }

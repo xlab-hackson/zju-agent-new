@@ -21,7 +21,7 @@ Future<void> exportPng(GlobalKey key, String semester) async {
   final image = await boundary.toImage(pixelRatio: 2);
   try {
     final data = await image.toByteData(format: ui.ImageByteFormat.png);
-    await saveBytes('课表-$semester.png',data!.buffer.asUint8List());
+    await saveBytes('课表-$semester.png', data!.buffer.asUint8List());
   } finally {
     image.dispose();
   }
@@ -50,7 +50,7 @@ List<int> timetableWorkbook(List<TimetableEntry> entries, String semester) {
       '周日',
     ].map(TextCellValue.new).toList(),
   );
-  for (var section = 1; section <= 15; section++) {
+  for (var section = 1; section <= 13; section++) {
     sheet
         .cell(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: section + 1))
         .value = TextCellValue(
@@ -94,12 +94,15 @@ List<int> timetableWorkbook(List<TimetableEntry> entries, String semester) {
   for (var c = 0; c < 8; c++) {
     sheet.setColumnWidth(c, c == 0 ? 18 : 26);
   }
-  for (var r = 2; r < 17; r++) {
+  for (var r = 2; r < 15; r++) {
     sheet.setRowHeight(r, 42);
   }
   return excel.encode()!;
 }
 
 Future<void> exportXlsx(List<TimetableEntry> entries, String semester) async {
-  await saveBytes('课表-$semester.xlsx',Uint8List.fromList(timetableWorkbook(entries, semester)));
+  await saveBytes(
+    '课表-$semester.xlsx',
+    Uint8List.fromList(timetableWorkbook(entries, semester)),
+  );
 }

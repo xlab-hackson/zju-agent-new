@@ -115,6 +115,7 @@ class AgentService {
         for (final k in ['courseId', 'fileId', 'fileName']) {
           string(k, needed: true);
         }
+        string('courseName');
         properties['officePdf'] = {'type': 'boolean'};
       }
       if (entry.key == 'zju_batch_download') {
@@ -126,6 +127,7 @@ class AgentService {
             'type': 'object',
             'properties': {
               'courseId': {'type': 'string'},
+              'courseName': {'type': 'string'},
               'fileId': {'type': 'string'},
               'fileName': {'type': 'string'},
               'officePdf': {'type': 'boolean'},
@@ -337,6 +339,7 @@ class AgentService {
   }) async* {
     final token = CancelToken();
     _active[id] = token;
+    var stage = '读取模型配置';
     try {
       final settings = await db.get('settings', 'app') ?? {};
       final providerConfig = await campus.session.secrets.read('providers');
@@ -347,6 +350,7 @@ class AgentService {
         throw const AppError('LLM_CONFIG_INVALID', '请先配置模型来源。');
       }
       final provider = providers.first;
+      stage = '加载聊天提示词';
       final prompts = object(
         jsonDecode(await rootBundle.loadString('assets/prompts.json')),
       );
@@ -355,6 +359,7 @@ class AgentService {
       for (var r = round; r < 8; r++) {
         var content = '';
         final calls = <Json>[];
+        stage = '接收模型回答';
         await for (final event in model.complete(
           provider,
           [
@@ -388,12 +393,14 @@ class AgentService {
                 .toList(),
         };
         messages.add(assistant);
+        stage = '保存聊天记录';
         if (!widget) await saveMessage(id, assistant);
         if (calls.isEmpty) {
           yield AgentEvent('done', {'conversationId': id, 'paused': false});
           return;
         }
         for (var index = 0; index < calls.length; index++) {
+          stage = '处理工具调用';
           final call = calls[index],
               name = text(call, 'name'),
               input = object(call['input']);
@@ -440,10 +447,11 @@ class AgentService {
       throw const AppError('AGENT_MAX_ROUNDS', '已达到本次工具调用轮数上限，请继续提问。');
     } on AppError catch (e) {
       yield AgentEvent('error', {'code': e.code, 'message': e.message});
-    } catch (_) {
-      yield const AgentEvent('error', {
+    } catch (e) {
+      yield AgentEvent('error', {
         'code': 'AGENT_ERROR',
-        'message': '回答未完成，请重试。',
+        // Exception payloads may include request headers, keys or chat text.
+        'message': '$stage失败（${e.runtimeType}），请重试。',
       });
     } finally {
       _active.remove(id);

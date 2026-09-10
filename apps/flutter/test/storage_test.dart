@@ -84,6 +84,24 @@ void main() {
       throwsA(isA<AppError>()),
     );
   });
+  test(
+    'download paths are grouped by course and suffix duplicate names',
+    () async {
+      final first = File(confinedPath(root.path, '高等数学/讲义.pdf'));
+      await first.parent.create(recursive: true);
+      await first.create();
+      expect(
+        await availableDownloadPath(root.path, '高等数学', '讲义.pdf'),
+        '高等数学/讲义 (1).pdf',
+      );
+      final second = File(confinedPath(root.path, '高等数学/讲义 (1).pdf'));
+      await second.create();
+      expect(
+        await availableDownloadPath(root.path, '高等数学', '讲义.pdf'),
+        '高等数学/讲义 (2).pdf',
+      );
+    },
+  );
   test('tool schemas enforce required fields and batch bounds', () {
     expect(agent.toolDefinitions().length, 14);
     expect(agent.toolDefinitions(readOnly: true).length, 12);

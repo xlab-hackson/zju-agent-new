@@ -50,6 +50,11 @@ class FileService {
       }
     }
     final id = const Uuid().v4(), pdf = input['officePdf'] == true;
+    final courseId = text(input, 'courseId');
+    final courseName = await _courseName(input, courseId);
+    final courseFolder = safeName(
+      courseName.isEmpty ? '课程-$courseId' : courseName,
+    );
     var url =
         '${CampusService.coursesBase}/api/uploads/${Uri.encodeComponent(text(input, 'fileId'))}/blob';
     if (pdf) {
@@ -62,15 +67,18 @@ class FileService {
     final name = pdf
         ? '${p.basenameWithoutExtension(safeName(text(input, 'fileName')))}.pdf'
         : safeName(text(input, 'fileName'));
-    final relative = '$id/$name',
-        target = File(confinedPath(root.path, relative));
+    final relative = await availableDownloadPath(root.path, courseFolder, name);
+    final target = File(confinedPath(root.path, relative));
     final record = <String, dynamic>{
       'id': id,
       'fileName': name,
       'relativePath': relative,
       'status': 'downloading',
-      'courseId': input['courseId'],
+      'courseId': courseId,
+      'courseName': courseName,
+      'courseFolder': courseFolder,
       'fileId': input['fileId'],
+      'officePdf': pdf,
     };
     await db.put('downloads', id, record);
     try {
@@ -101,6 +109,15 @@ class FileService {
     }
   }
 
+  /// Material responses do not always carry the course name. Read only the
+  /// local cache so UI, agent and batch downloads use the same course directory
+  /// without adding another network/login wait to the download button.
+  Future<String> _courseName(Json input, String courseId) async {
+    final supplied = text(input, 'courseName').trim();
+    if (supplied.isNotEmpty) return supplied;
+    return campus.cachedCourseName(courseId);
+  }
+
   Future<File> file(Json record) async {
     final candidate = File(
       confinedPath(root.path, text(record, 'relativePath')),
@@ -124,6 +141,20 @@ class FileService {
       }
     }
     await db.remove('downloads', text(record, 'id'));
+  }
+}
+
+Future<String> availableDownloadPath(
+  String root,
+  String courseFolder,
+  String fileName,
+) async {
+  final extension = p.extension(fileName);
+  final stem = p.basenameWithoutExtension(fileName);
+  for (var index = 0; ; index++) {
+    final candidate = index == 0 ? fileName : '$stem ($index)$extension';
+    final relative = '$courseFolder/$candidate';
+    if (!await File(confinedPath(root, relative)).exists()) return relative;
   }
 }
 

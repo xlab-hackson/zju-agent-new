@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
+import 'package:html/parser.dart' as html;
 import '../data/campus_session.dart';
 import '../data/database.dart';
 import '../domain/models.dart';
@@ -107,6 +108,21 @@ class CampusService {
         .map((s) => s['id'])
         .toSet();
     return all.where((c) => ids.contains(c['semesterId'])).toList();
+  }
+
+  /// Read a course name without starting a network request. Downloads should
+  /// never wait for a second campus request just to choose a folder name.
+  Future<String> cachedCourseName(String courseId) async {
+    try {
+      final cache = await db.get('cache', 'courses');
+      if (cache == null) return '';
+      for (final course in rows(cache['items'])) {
+        if (text(course, 'id') == courseId) return text(course, 'name').trim();
+      }
+    } catch (_) {
+      // Fall back to the deterministic course-ID folder.
+    }
+    return '';
   }
 
   Future<List<Json>> materials(
@@ -389,17 +405,22 @@ class CampusService {
     final wall = beijing(now ?? DateTime.now()),
         end = beijing(now ?? DateTime.now()).add(const Duration(hours: 48));
     final all = <Json>[];
+    Json? firstDateInfo;
     for (var i = 0; i < 3; i++) {
       final d = await daily(day(wall).add(Duration(days: i)));
+      firstDateInfo ??= object(d['dateInfo'] ?? {});
       all.addAll(rows(d['events']));
     }
+    final events = all.where((e) {
+      final start = DateTime.parse('${e['date']}T${e['startTime']}:00Z'),
+          finish = DateTime.parse('${e['date']}T${e['endTime']}:00Z');
+      return !finish.isBefore(wall) && !start.isAfter(end);
+    }).toList();
     return {
       'now': wall.toIso8601String(),
-      'events': all.where((e) {
-        final start = DateTime.parse('${e['date']}T${e['startTime']}:00Z'),
-            finish = DateTime.parse('${e['date']}T${e['endTime']}:00Z');
-        return !finish.isBefore(wall) && !start.isAfter(end);
-      }).toList(),
+      'dateInfo': firstDateInfo ?? {},
+      'events': events,
+      'assignments48h': events.where((e) => e['type'] == 'assignment').toList(),
     };
   }
 }
@@ -455,10 +476,26 @@ List<Json> parseNotices(Json j, String source) {
           ? isoDay(beijing(parsed))
           : date,
       'publisher': r[source == 'sztz' ? 'fbr' : 'xwfbr'],
+      'summary': stripHtmlText(r['zy'] ?? r['nr'] ?? r['content'] ?? r['jj']),
       'important': r['sfzd'] == '1',
       'url': source == 'sztz'
           ? 'https://sztz.zju.edu.cn/dekt/#/index/tzgg?id=$id'
           : '${CampusService.zdbkBase}/xtgl/xwck_ckLoginNews.html?xwbh=$id',
     };
   }).toList();
+}
+
+String stripHtmlText(Object? value) {
+  final raw = value?.toString() ?? '';
+  if (raw.trim().isEmpty) return '';
+  final withBreaks = raw.replaceAll(
+    RegExp(r'<br\s*/?>', caseSensitive: false),
+    '\n',
+  );
+  final plain = html.parse(withBreaks).body?.text ?? '';
+  return plain
+      .replaceAll('\u00a0', ' ')
+      .replaceAll(RegExp(r'[ \t]+'), ' ')
+      .replaceAll(RegExp(r'\n[ \t]*\n+'), '\n')
+      .trim();
 }

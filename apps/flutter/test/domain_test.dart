@@ -56,6 +56,24 @@ void main() {
     expect(merged.first.startSection, 1);
     expect(merged.first.endSection, 3);
   });
+  test('timetable course count uses distinct academic courses', () {
+    TimetableEntry entry(String name, int start) => TimetableEntry(
+      id: '$start',
+      courseName: name,
+      weekday: 1,
+      startSection: start,
+      endSection: start,
+    );
+    expect(
+      timetableCourseCount([
+        entry('数学', 1),
+        entry('数学', 3),
+        entry(' 物理 ', 5),
+        entry('', 7),
+      ]),
+      2,
+    );
+  });
   test('bundled calendar holiday and makeup projection', () {
     final config = object(
       object(
@@ -73,10 +91,16 @@ void main() {
     final sztz = parseNotices({
       'code': 0,
       'data': [
-        {'id': 1, 'mc': '通知', 'fbsj': '2026-07-06T19:09:17Z'},
+        {
+          'id': 1,
+          'mc': '通知',
+          'fbsj': '2026-07-06T19:09:17Z',
+          'zy': '<p>校园&nbsp;通知</p><br><strong>请查看</strong>',
+        },
       ],
     }, 'sztz').single;
     expect(sztz['date'], '2026-07-07');
+    expect(sztz['summary'], '校园 通知\n请查看');
     final zdbk = parseNotices({
       'items': [
         {'xwbh': 'a', 'xwbt': '考试', 'xwfbr': '教务处', 'fbr': '123', 'sfzd': '1'},
@@ -86,7 +110,8 @@ void main() {
     expect(zdbk['important'], true);
   });
   test('RSA protocol exponent is hexadecimal and ciphertext padded', () {
-    expect(encryptCampusPassword('A', '03', '0ca1'), '0ae6');
+    // 65^3 mod 3233 = 3053 = 0x0bed (raw RSA, exponent 3).
+    expect(encryptCampusPassword('A', '03', '0ca1'), '0bed');
     final expected = BigInt.from(65)
         .modPow(BigInt.from(65537), BigInt.from(3233))
         .toRadixString(16)

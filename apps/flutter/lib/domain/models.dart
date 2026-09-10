@@ -75,6 +75,12 @@ class TimetableEntry {
   };
 }
 
+int timetableCourseCount(Iterable<TimetableEntry> entries) => entries
+    .map((entry) => entry.courseName.trim())
+    .where((name) => name.isNotEmpty)
+    .toSet()
+    .length;
+
 List<TimetableEntry> mergeTimetable(List<TimetableEntry> entries) {
   final sorted = [...entries]
     ..sort((a, b) => a.startSection.compareTo(b.startSection));

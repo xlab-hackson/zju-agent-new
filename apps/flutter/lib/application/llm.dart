@@ -22,7 +22,12 @@ Uri modelEndpoint(String base, String protocol) {
 Stream<String> sseData(Stream<List<int>> bytes) async* {
   final buffer = <String>[];
   await for (final line
-      in bytes.transform(utf8.decoder).transform(const LineSplitter())) {
+      // Dio returns Stream<Uint8List>. Widen the stream's runtime type before
+      // transform, not just its static type, to avoid a transformer TypeError.
+      in bytes
+          .cast<List<int>>()
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())) {
     if (line.isEmpty) {
       if (buffer.isNotEmpty) {
         yield buffer.join('\n');
@@ -172,9 +177,27 @@ class ModelClient {
       }
       yield const AgentEvent('message_end', {'finishReason': 'stop'});
     } on DioException catch (e) {
+      final status = e.response?.statusCode;
+      final message = switch (e.type) {
+        DioExceptionType.cancel => '已停止回答。',
+        DioExceptionType.connectionTimeout ||
+        DioExceptionType.receiveTimeout ||
+        DioExceptionType.sendTimeout => '模型响应超时，请稍后重试。',
+        _ => switch (status) {
+          401 => '模型服务拒绝认证（HTTP 401），请检查 API Key。',
+          403 => '模型服务拒绝访问（HTTP 403），请检查账号和模型权限。',
+          404 => '模型接口不存在（HTTP 404），请检查 API 地址和模型名称。',
+          429 => '模型请求受限（HTTP 429），请检查额度或稍后重试。',
+          final int code => '模型服务返回 HTTP $code，请检查模型配置或稍后重试。',
+          _ => '模型连接失败，请检查网络和 API 地址。',
+        },
+      };
       throw AppError(
         e.type == DioExceptionType.cancel ? 'CANCELLED' : 'LLM_REQUEST_FAILED',
-        e.type == DioExceptionType.cancel ? '已停止回答。' : '模型请求失败，请检查网络、地址和密钥。',
+        message,
+        retryable:
+            e.type != DioExceptionType.cancel &&
+            (status == null || status == 429 || status >= 500),
       );
     } on FormatException {
       throw const AppError('LLM_STREAM_ERROR', '模型返回的流式数据或工具参数无效。');
