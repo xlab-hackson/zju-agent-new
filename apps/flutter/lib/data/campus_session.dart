@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:html/parser.dart' as html;
 import '../domain/models.dart';
@@ -37,6 +39,7 @@ class _LoginState {
   final ready = <String>{};
   final revisions = <String, int>{};
   final flights = <String, Future<void>>{};
+  final downloadTokens = <CancelToken>{};
   final cancellation = CancelToken();
   Future<void> queue = Future.value();
   bool casLoggedIn = false;
@@ -62,6 +65,9 @@ class CampusSession {
     final old = _state;
     _state = _LoginState();
     old.cancellation.cancel();
+    for (final token in old.downloadTokens) {
+      token.cancel('登录已取消');
+    }
     for (final jar in old.jars.values) {
       jar.clear();
     }
@@ -84,6 +90,8 @@ class CampusSession {
     Map<String, dynamic> headers = const {},
     bool follow = false,
     bool bytes = false,
+    bool stream = false,
+    CancelToken? cancelToken,
   }) async {
     final jar = state.jars[owner]!;
     var current = Uri.parse(url), verb = method, body = data;
@@ -104,22 +112,32 @@ class CampusSession {
         response = await dio.request<dynamic>(
           current.toString(),
           data: body,
-          cancelToken: state.cancellation,
+          cancelToken: cancelToken ?? state.cancellation,
           options: Options(
             method: verb,
             followRedirects: false,
             validateStatus: (s) => s != null,
-            responseType: bytes ? ResponseType.bytes : ResponseType.plain,
+            responseType: stream
+                ? ResponseType.stream
+                : bytes
+                ? ResponseType.bytes
+                : ResponseType.plain,
             headers: {...requestHeaders, 'Cookie': jar.header(current)},
           ),
         );
       } on DioException catch (e) {
+        if (cancelToken?.isCancelled == true) {
+          throw const AppError('CANCELLED', '下载已取消。');
+        }
         _check(state);
         throw AppError(
           'ZJU_SERVICE_UNAVAILABLE',
           '校园网络请求失败（${e.type.name}），请检查网络后重试。',
           retryable: true,
         );
+      }
+      if (cancelToken?.isCancelled == true) {
+        throw const AppError('CANCELLED', '下载已取消。');
       }
       _check(state);
       jar.store(current, response.headers['set-cookie'] ?? []);
@@ -158,6 +176,14 @@ class CampusSession {
   String _body(Response<dynamic> response) => response.data is List<int>
       ? utf8.decode(response.data as List<int>, allowMalformed: true)
       : '${response.data ?? ''}';
+
+  Future<void> _closeResponse(Response<dynamic> response) async {
+    final body = response.data;
+    if (body is ResponseBody) {
+      final subscription = body.stream.listen((_) {});
+      await subscription.cancel();
+    }
+  }
 
   Future<String> _passwordLogin(_LoginState state, String loginUrl) async {
     final credential = await secrets.read('campus');
@@ -387,10 +413,29 @@ class CampusSession {
     String method = 'GET',
     Object? data,
     bool bytes = false,
+    bool stream = false,
+    CancelToken? cancelToken,
   }) async {
     final state = _state;
-    await _ensure(state, service);
+    if (cancelToken?.isCancelled == true) {
+      throw const AppError('CANCELLED', '下载已取消。');
+    }
+    Future<void> ensureService() {
+      final ensure = _ensure(state, service);
+      if (cancelToken == null) return ensure;
+      return Future.any<void>([
+        ensure,
+        cancelToken.whenCancel.then<void>(
+          (_) => throw const AppError('CANCELLED', '下载已取消。'),
+        ),
+      ]);
+    }
+
+    await ensureService();
     _check(state);
+    if (cancelToken?.isCancelled == true) {
+      throw const AppError('CANCELLED', '下载已取消。');
+    }
     final revision = state.revisions[service];
     final headers = <String, dynamic>{
       if (service == 'zdbk') ...{
@@ -411,8 +456,11 @@ class CampusSession {
           data: i == 0 ? data : null,
           headers: headers,
           bytes: bytes,
+          stream: stream,
+          cancelToken: cancelToken,
         );
         if (_expired(r) || !_isRedirect(r.statusCode)) return r;
+        await _closeResponse(r);
         current = _location(r, current);
       }
       throw const AppError('ZJU_SERVICE_UNAVAILABLE', '校园请求跳转次数过多。');
@@ -420,8 +468,9 @@ class CampusSession {
 
     var response = await fetch();
     if (_expired(response)) {
+      await _closeResponse(response);
       if (state.revisions[service] == revision) state.ready.remove(service);
-      await _ensure(state, service);
+      await ensureService();
       response = await fetch();
     }
     _check(state);
@@ -438,13 +487,110 @@ class CampusSession {
     return response;
   }
 
+  /// Stream a response directly to [target]. Unlike ResponseType.bytes this
+  /// keeps only one network chunk in memory and applies backpressure while
+  /// the file is written, so a large download cannot retain a whole duplicate
+  /// byte array on the UI isolate.
+  Future<CampusFileDownload> downloadToFile(
+    String service,
+    String url,
+    File target, {
+    CancelToken? cancelToken,
+    int maxBytes = 512 * 1024 * 1024,
+  }) async {
+    final state = _state;
+    if (cancelToken != null) {
+      state.downloadTokens.add(cancelToken);
+      if (state.cancellation.isCancelled) cancelToken.cancel('登录已取消');
+    }
+    try {
+      final response = await request(
+        service,
+        url,
+        stream: true,
+        cancelToken: cancelToken,
+      );
+      final contentType =
+          response.headers.value(Headers.contentTypeHeader)?.toLowerCase() ??
+          '';
+      if (contentType.contains('text/html')) {
+        await _closeResponse(response);
+        throw const AppError('ZJU_AUTH_FAILED', '校园服务返回了登录页面，请重新登录后重试。');
+      }
+      final declaredLength = int.tryParse(
+        response.headers.value(Headers.contentLengthHeader) ?? '',
+      );
+      if (declaredLength != null && declaredLength > maxBytes) {
+        await _closeResponse(response);
+        throw const AppError('FILE_DOWNLOAD_FAILED', '文件超过 512 MB，请使用学校页面下载。');
+      }
+      final body = response.data;
+      if (body is! ResponseBody) {
+        throw const AppError('FILE_DOWNLOAD_FAILED', '校园服务未返回可下载的文件流。');
+      }
+
+      await target.parent.create(recursive: true);
+      final iterator = StreamIterator<Uint8List>(body.stream);
+      RandomAccessFile? file;
+      var received = 0;
+      try {
+        file = await target.open(mode: FileMode.write);
+        while (true) {
+          if (cancelToken?.isCancelled == true) {
+            throw const AppError('CANCELLED', '下载已取消。');
+          }
+          final moveNext = iterator.moveNext();
+          final hasNext = cancelToken == null
+              ? await moveNext
+              : await Future.any<bool>([
+                  moveNext,
+                  cancelToken.whenCancel.then<bool>((_) => false),
+                ]);
+          if (!hasNext) {
+            if (cancelToken?.isCancelled == true) {
+              throw const AppError('CANCELLED', '下载已取消。');
+            }
+            break;
+          }
+          final chunk = iterator.current;
+          final next = received + chunk.length;
+          if (next > maxBytes) {
+            throw const AppError(
+              'FILE_DOWNLOAD_FAILED',
+              '文件超过 512 MB，请使用学校页面下载。',
+            );
+          }
+          await file.writeFrom(chunk);
+          received = next;
+          _check(state);
+        }
+        return CampusFileDownload(
+          size: received,
+          mimeType: response.headers.value(Headers.contentTypeHeader),
+        );
+      } finally {
+        await iterator.cancel();
+        await file?.close();
+      }
+    } finally {
+      if (cancelToken != null) state.downloadTokens.remove(cancelToken);
+    }
+  }
+
   Future<Json> json(
     String service,
     String url, {
     String method = 'GET',
     Object? data,
+    CancelToken? cancelToken,
   }) async {
-    final response = await request(service, url, method: method, data: data);
+    final response = await request(
+      service,
+      url,
+      method: method,
+      data: data,
+      cancelToken: cancelToken,
+    );
     try {
       return object(
         response.data is String ? jsonDecode(response.data) : response.data,
@@ -453,4 +599,10 @@ class CampusSession {
       throw const AppError('ZJU_RESPONSE_PARSE_FAILED', '校园接口返回了无法解析的数据。');
     }
   }
+}
+
+class CampusFileDownload {
+  const CampusFileDownload({required this.size, required this.mimeType});
+  final int size;
+  final String? mimeType;
 }

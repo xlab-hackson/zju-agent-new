@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 import 'package:zju_campus_agent/data/campus_session.dart';
 import 'package:zju_campus_agent/data/credentials.dart';
 import 'package:zju_campus_agent/data/login_cookie_jar.dart';
@@ -428,6 +430,38 @@ void main() {
       expect(adapter.cursor, 3);
     },
   );
+  test('streaming file responses write incrementally to disk', () async {
+    final adapter = ScriptAdapter([
+      Step('GET', '$courses/user/index', '<html>课程主页</html>'),
+      Step(
+        'GET',
+        '$courses/blob',
+        'streamed file contents',
+        headers: {
+          'content-type': ['application/octet-stream'],
+        },
+        check: (o, _) => expect(o.responseType, ResponseType.stream),
+      ),
+    ]);
+    final session = CampusSession(
+      Secrets(),
+      client: Dio()..httpClientAdapter = adapter,
+    );
+    final directory = await Directory.systemTemp.createTemp('zju_stream_');
+    final target = File(p.join(directory.path, 'file.bin'));
+    try {
+      final result = await session.downloadToFile(
+        'courses',
+        '$courses/blob',
+        target,
+      );
+      expect(result.size, 'streamed file contents'.length);
+      expect(await target.readAsString(), 'streamed file contents');
+      expect(adapter.cursor, 2);
+    } finally {
+      await directory.delete(recursive: true);
+    }
+  });
   test('JSON text mentioning login is data, not an expired session', () async {
     final adapter = ScriptAdapter([
       Step('GET', '$courses/user/index', '<html>课程主页</html>'),

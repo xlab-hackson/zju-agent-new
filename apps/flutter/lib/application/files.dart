@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:archive/archive.dart';
+import 'package:dio/dio.dart';
 
 import 'package:path/path.dart' as p;
 
@@ -42,14 +43,33 @@ class FileService {
   FileService(this.campus, this.root);
   final CampusService campus;
   final Directory root;
+  final _activeDownloadsByKey = <String, _ActiveDownload>{};
+  final _activeDownloadsById = <String, _ActiveDownload>{};
+  final _reservedPaths = <String>{};
   AgentDatabase get db => campus.db;
-  Future<Json> download(Json input) async {
+
+  Future<Json> download(Json input) {
     for (final key in ['fileId', 'fileName', 'courseId']) {
       if (text(input, key).isEmpty) {
         throw const AppError('TOOL_INPUT_INVALID', '缺少文件参数。');
       }
     }
-    final id = const Uuid().v4(), pdf = input['officePdf'] == true;
+    final key = _downloadKey(input);
+    final existing = _activeDownloadsByKey[key];
+    if (existing != null) return existing.future;
+
+    final id = const Uuid().v4();
+    final task = _ActiveDownload(key, id, CancelToken());
+    final raw = _download(input, task);
+    final managed = _track(task, raw);
+    task.future = managed;
+    _activeDownloadsByKey[key] = task;
+    _activeDownloadsById[id] = task;
+    return managed;
+  }
+
+  Future<Json> _download(Json input, _ActiveDownload task) async {
+    final id = task.id, pdf = input['officePdf'] == true;
     final courseId = text(input, 'courseId');
     final courseName = await _courseName(input, courseId);
     final courseFolder = safeName(
@@ -61,14 +81,16 @@ class FileService {
       final meta = await campus.session.json(
         'courses',
         '${CampusService.coursesBase}/api/uploads/document/${Uri.encodeComponent(text(input, 'fileId'))}/url?preview=true',
+        cancelToken: task.cancelToken,
       );
       url = text(meta, 'url');
     }
     final name = pdf
         ? '${p.basenameWithoutExtension(safeName(text(input, 'fileName')))}.pdf'
         : safeName(text(input, 'fileName'));
-    final relative = await availableDownloadPath(root.path, courseFolder, name);
+    final relative = await _reserveDownloadPath(courseFolder, name);
     final target = File(confinedPath(root.path, relative));
+    final temp = File('${target.path}.$id.part');
     final record = <String, dynamic>{
       'id': id,
       'fileName': name,
@@ -80,32 +102,69 @@ class FileService {
       'fileId': input['fileId'],
       'officePdf': pdf,
     };
-    await db.put('downloads', id, record);
     try {
-      final response = await campus.session.request(
+      await db.put('downloads', id, record);
+      final transfer = await campus.session.downloadToFile(
         'courses',
         url,
-        bytes: true,
+        temp,
+        cancelToken: task.cancelToken,
       );
-      final bytes = List<int>.from(response.data as List);
-      if (bytes.length > 512 * 1024 * 1024) {
-        throw const AppError('FILE_DOWNLOAD_FAILED', '文件超过 512 MB，请使用学校页面下载。');
-      }
-      await target.parent.create(recursive: true);
-      final temp = File('${target.path}.part');
-      await temp.writeAsBytes(bytes, flush: true);
       await temp.rename(target.path);
       record.addAll({
         'status': 'completed',
-        'size': bytes.length,
-        'mimeType': response.headers.value('content-type'),
+        'size': transfer.size,
+        'mimeType': transfer.mimeType,
       });
       await db.put('downloads', id, record);
       return record;
     } catch (_) {
+      try {
+        if (await temp.exists()) await temp.delete();
+      } catch (_) {
+        // A failed cleanup must not hide the original download error.
+      }
       record['status'] = 'failed';
       await db.put('downloads', id, record);
       rethrow;
+    } finally {
+      _reservedPaths.remove(relative);
+    }
+  }
+
+  Future<Json> _track(_ActiveDownload task, Future<Json> future) async {
+    try {
+      return await future;
+    } finally {
+      if (identical(_activeDownloadsByKey[task.key], task)) {
+        _activeDownloadsByKey.remove(task.key);
+      }
+      if (identical(_activeDownloadsById[task.id], task)) {
+        _activeDownloadsById.remove(task.id);
+      }
+    }
+  }
+
+  String _downloadKey(Json input) => [
+    text(input, 'courseId'),
+    text(input, 'fileId'),
+    input['officePdf'] == true ? 'pdf' : 'raw',
+  ].join('\u0000');
+
+  Future<String> _reserveDownloadPath(
+    String courseFolder,
+    String fileName,
+  ) async {
+    final extension = p.extension(fileName);
+    final stem = p.basenameWithoutExtension(fileName);
+    for (var index = 0; ; index++) {
+      final candidate = index == 0 ? fileName : '$stem ($index)$extension';
+      final relative = '$courseFolder/$candidate';
+      if (_reservedPaths.contains(relative)) continue;
+      if (!await File(confinedPath(root.path, relative)).exists()) {
+        _reservedPaths.add(relative);
+        return relative;
+      }
     }
   }
 
@@ -133,6 +192,16 @@ class FileService {
   }
 
   Future<void> delete(Json record, {bool purge = false}) async {
+    final id = text(record, 'id');
+    final active = _activeDownloadsById[id];
+    if (active != null) {
+      active.cancelToken.cancel('用户删除了下载');
+      try {
+        await active.future;
+      } catch (_) {
+        // The canceled download has already recorded its failed state.
+      }
+    }
     if (purge) {
       try {
         await (await file(record)).delete();
@@ -140,8 +209,15 @@ class FileService {
         if (e.code != 'FILE_NOT_FOUND') rethrow;
       }
     }
-    await db.remove('downloads', text(record, 'id'));
+    await db.remove('downloads', id);
   }
+}
+
+class _ActiveDownload {
+  _ActiveDownload(this.key, this.id, this.cancelToken);
+  final String key, id;
+  final CancelToken cancelToken;
+  late Future<Json> future;
 }
 
 Future<String> availableDownloadPath(

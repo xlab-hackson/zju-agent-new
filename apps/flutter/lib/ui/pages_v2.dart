@@ -120,11 +120,8 @@ class _FeaturePageState extends State<FeaturePage> with WidgetsBindingObserver {
         } catch (_) {
           // A malformed cache must not hide the download records.
         }
-        try {
-          downloadCourses = [...downloadCourses, ...await s.campus.courses()];
-        } catch (_) {
-          // Cached course names are enough to group records while offline.
-        }
+        // Keep this page local-only. A download/delete must not wait for a
+        // course refresh before the other download cards become interactive.
         return {
           'items': await s.db.list('downloads'),
           'courses': downloadCourses,
@@ -2050,8 +2047,11 @@ class _DownloadCardState extends State<DownloadCard> {
   @override
   Widget build(BuildContext context) {
     final name = text(r, 'fileName'), kind = fileKind(name);
+    final inProgress = text(r, 'status') == 'downloading';
     final canRedownload =
-        text(r, 'fileId').isNotEmpty && text(r, 'courseId').isNotEmpty;
+        !inProgress &&
+        text(r, 'fileId').isNotEmpty &&
+        text(r, 'courseId').isNotEmpty;
     final completed = text(r, 'status') == 'completed';
     final actions = Wrap(
       alignment: WrapAlignment.end,
@@ -2060,8 +2060,13 @@ class _DownloadCardState extends State<DownloadCard> {
       children: [
         if (canPreview(kind))
           TextButton(
-            onPressed: busy ? null : () => preview(),
+            onPressed: busy || inProgress ? null : () => preview(),
             child: const Text('预览'),
+          ),
+        if (inProgress)
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+            child: Text('下载中…', style: TextStyle(color: blue)),
           ),
         if (canRedownload)
           TextButton(
@@ -2069,7 +2074,7 @@ class _DownloadCardState extends State<DownloadCard> {
             child: Text(completed ? '重新下载' : '重试下载'),
           ),
         OutlinedButton(
-          onPressed: busy ? null : () => run(openLocal),
+          onPressed: busy || inProgress ? null : () => run(openLocal),
           child: const Text('打开'),
         ),
         if (!confirming)

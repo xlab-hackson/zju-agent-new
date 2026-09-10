@@ -1,6 +1,9 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:archive/archive.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:zju_campus_agent/data/database.dart';
 import 'package:zju_campus_agent/data/credentials.dart';
@@ -24,6 +27,34 @@ class MemorySecrets implements SecretStore {
   Future<void> delete(String key) async {
     values.remove(key);
   }
+}
+
+class DeferredDownloadAdapter implements HttpClientAdapter {
+  DeferredDownloadAdapter(this.body);
+  final StreamController<Uint8List> body;
+  int calls = 0;
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    calls++;
+    if (calls == 1) {
+      return ResponseBody.fromString('<html>课程主页</html>', 200);
+    }
+    return ResponseBody(
+      body.stream,
+      200,
+      headers: {
+        'content-type': ['application/octet-stream'],
+      },
+    );
+  }
+
+  @override
+  void close({bool force = false}) {}
 }
 
 void main() {
@@ -100,6 +131,42 @@ void main() {
         await availableDownloadPath(root.path, '高等数学', '讲义.pdf'),
         '高等数学/讲义 (2).pdf',
       );
+    },
+  );
+  test(
+    'duplicate active downloads share one stream and deletion cancels it',
+    () async {
+      final body = StreamController<Uint8List>();
+      final adapter = DeferredDownloadAdapter(body);
+      final campus = CampusService(
+        CampusSession(
+          MemorySecrets(),
+          client: Dio()..httpClientAdapter = adapter,
+        ),
+        db,
+      );
+      final files = FileService(campus, root);
+      final input = {
+        'courseId': 'course-1',
+        'courseName': '测试课程',
+        'fileId': 'file-1',
+        'fileName': 'large.bin',
+      };
+      final first = files.download(input);
+      final second = files.download(input);
+      expect(identical(first, second), isTrue);
+      for (var i = 0; i < 20 && adapter.calls < 2; i++) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      expect(adapter.calls, 2);
+      final record = (await db.list('downloads')).single;
+      await files.delete(record, purge: true);
+      await expectLater(
+        first,
+        throwsA(isA<AppError>().having((e) => e.code, 'code', 'CANCELLED')),
+      );
+      expect(await db.list('downloads'), isEmpty);
+      await body.close();
     },
   );
   test('tool schemas enforce required fields and batch bounds', () {
