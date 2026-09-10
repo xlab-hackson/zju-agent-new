@@ -60,10 +60,16 @@ class CampusSession {
   final SecretStore secrets;
   final Dio dio;
   _LoginState _state = _LoginState();
+  String _authStatus = 'unknown';
+
+  /// The last known state of an authenticated campus request. Credentials
+  /// being present locally is not enough to call the session connected.
+  String get authStatus => _authStatus;
 
   Future<void> reset() async {
     final old = _state;
     _state = _LoginState();
+    _authStatus = 'unknown';
     old.cancellation.cancel();
     for (final token in old.downloadTokens) {
       token.cancel('登录已取消');
@@ -416,6 +422,35 @@ class CampusSession {
     bool stream = false,
     CancelToken? cancelToken,
   }) async {
+    try {
+      final response = await _request(
+        service,
+        url,
+        method: method,
+        data: data,
+        bytes: bytes,
+        stream: stream,
+        cancelToken: cancelToken,
+      );
+      _authStatus = 'connected';
+      return response;
+    } on AppError catch (e) {
+      if (e.code == 'ZJU_AUTH_FAILED' || e.code == 'ZJU_CREDENTIAL_MISSING') {
+        _authStatus = 'invalid';
+      }
+      rethrow;
+    }
+  }
+
+  Future<Response<dynamic>> _request(
+    String service,
+    String url, {
+    String method = 'GET',
+    Object? data,
+    bool bytes = false,
+    bool stream = false,
+    CancelToken? cancelToken,
+  }) async {
     final state = _state;
     if (cancelToken?.isCancelled == true) {
       throw const AppError('CANCELLED', '下载已取消。');
@@ -476,6 +511,13 @@ class CampusSession {
     _check(state);
     if (_expired(response)) {
       throw const AppError('ZJU_AUTH_FAILED', '登录已过期，请重新登录。');
+    }
+    if (stream &&
+        (response.headers.value(Headers.contentTypeHeader) ?? '')
+            .toLowerCase()
+            .contains('text/html')) {
+      await _closeResponse(response);
+      throw const AppError('ZJU_AUTH_FAILED', '校园服务返回了登录页面，请重新登录后重试。');
     }
     if ((response.statusCode ?? 500) >= 400) {
       throw AppError(

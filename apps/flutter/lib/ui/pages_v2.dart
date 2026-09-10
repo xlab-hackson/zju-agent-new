@@ -131,10 +131,14 @@ class _FeaturePageState extends State<FeaturePage> with WidgetsBindingObserver {
         return {};
       default:
         final campus = await s.secrets.read('campus');
+        final hasCampusCredential = campus != null;
         final providers = await s.secrets.read('providers');
         final result = <String, dynamic>{
           'settings': await s.db.get('settings', 'app') ?? {},
-          'hasCampusCredential': campus != null,
+          'hasCampusCredential': hasCampusCredential,
+          'campusStatus': hasCampusCredential
+              ? s.campus.session.authStatus
+              : 'missing',
           'hasModel': rows(providers?['items'] ?? []).isNotEmpty,
         };
         for (final entry in <String, Future<Object?> Function()>{
@@ -152,6 +156,9 @@ class _FeaturePageState extends State<FeaturePage> with WidgetsBindingObserver {
             result['${entry.key}Error'] = e.message;
           }
         }
+        result['campusStatus'] = hasCampusCredential
+            ? s.campus.session.authStatus
+            : 'missing';
         return result;
     }
   }
@@ -926,8 +933,9 @@ class _FeaturePageState extends State<FeaturePage> with WidgetsBindingObserver {
     final name = text(settings, 'nickname').trim().isEmpty
         ? '浙大学子'
         : text(settings, 'nickname');
+    final campusStatus = text(d, 'campusStatus', 'missing');
     return [
-      _dashboardHeader(name, dateInfo, d['hasCampusCredential'] == true),
+      _dashboardHeader(name, dateInfo, campusStatus),
       ChapterHead(
         juan: '卷一',
         title: '接下来',
@@ -969,7 +977,7 @@ class _FeaturePageState extends State<FeaturePage> with WidgetsBindingObserver {
   Widget _dashboardHeader(
     String name,
     Json info,
-    bool hasCredential,
+    String campusStatus,
   ) => Padding(
     padding: const EdgeInsets.only(bottom: 30),
     child: Column(
@@ -1025,8 +1033,15 @@ class _FeaturePageState extends State<FeaturePage> with WidgetsBindingObserver {
                           dot: true,
                         ),
                       InkTag(
-                        label: hasCredential ? '教务已同步' : '待绑定账号',
-                        color: hasCredential ? const Color(0xff2e7d32) : gold,
+                        label: switch (campusStatus) {
+                          'connected' => '教务已同步',
+                          'invalid' => '登录已失效',
+                          'unknown' => '待验证登录',
+                          _ => '待绑定账号',
+                        },
+                        color: campusStatus == 'connected'
+                            ? const Color(0xff2e7d32)
+                            : gold,
                         dot: true,
                       ),
                     ],
@@ -1334,6 +1349,15 @@ class _FeaturePageState extends State<FeaturePage> with WidgetsBindingObserver {
 
   Widget _connectionGrid(Json d) => LayoutBuilder(
     builder: (context, constraints) {
+      final status = text(d, 'campusStatus', 'missing');
+      final connected = status == 'connected';
+      final configured = d['hasCampusCredential'] == true;
+      final label = switch (status) {
+        'connected' => '已连接',
+        'invalid' => '登录已失效',
+        'unknown' => '待验证',
+        _ => '未配置',
+      };
       final width = constraints.maxWidth >= 700
           ? (constraints.maxWidth - 14) / 2
           : constraints.maxWidth;
@@ -1345,10 +1369,15 @@ class _FeaturePageState extends State<FeaturePage> with WidgetsBindingObserver {
             width: width,
             child: ConnectionCard(
               title: '统一身份认证（ZJU）',
-              ok: d['hasCampusCredential'] == true,
-              detail: d['hasCampusCredential'] == true
-                  ? '已连接学在浙大、教学教务与考场系统'
-                  : '绑定后即可一键拉取课表、同步作业与考签',
+              ok: connected,
+              configured: configured,
+              statusLabel: label,
+              detail: switch (status) {
+                'connected' => '已连接学在浙大、教学教务与考场系统',
+                'invalid' => '最近一次校园请求未通过认证，请重新登录或检查账号状态',
+                'unknown' => '已保存账号，但尚未验证当前校园登录状态',
+                _ => '绑定后即可一键拉取课表、同步作业与考签',
+              },
               action: () => context.go('/setup'),
             ),
           ),
@@ -2571,9 +2600,13 @@ class ConnectionCard extends StatelessWidget {
     required this.ok,
     required this.detail,
     required this.action,
+    this.configured = false,
+    this.statusLabel,
   });
   final String title, detail;
   final bool ok;
+  final bool configured;
+  final String? statusLabel;
   final VoidCallback action;
   @override
   Widget build(BuildContext context) => Paper(
@@ -2592,7 +2625,7 @@ class ConnectionCard extends StatelessWidget {
               ),
             ),
             InkTag(
-              label: ok ? '已连接' : '未配置',
+              label: statusLabel ?? (ok ? '已连接' : '未配置'),
               color: ok ? const Color(0xff2e7d32) : gold,
               dot: true,
             ),
@@ -2601,7 +2634,10 @@ class ConnectionCard extends StatelessWidget {
         const SizedBox(height: 12),
         Text(detail, style: const TextStyle(fontSize: 12, color: ink)),
         const SizedBox(height: 12),
-        TextButton(onPressed: action, child: Text(ok ? '管理配置  →' : '立即配置  →')),
+        TextButton(
+          onPressed: action,
+          child: Text(ok || configured ? '管理配置  →' : '立即配置  →'),
+        ),
       ],
     ),
   );
