@@ -29,6 +29,14 @@ class AppServices {
   final FileService files;
   final BackupService backups;
   final AgentService agent;
+  final Set<String> _initialRefreshes = <String>{};
+
+  /// Claims the one automatic refresh allowed for a page in this app run.
+  ///
+  /// Keeping this state above individual page widgets prevents navigating
+  /// away and back from issuing another automatic request.
+  bool claimInitialRefresh(String key) => _initialRefreshes.add(key);
+
   static Future<AppServices> create() async {
     final support = await getApplicationSupportDirectory();
     await support.create(recursive: true);
@@ -68,6 +76,7 @@ class AppServices {
   Future<void> logout() async {
     agent.cancelAll();
     await campus.session.reset();
+    _initialRefreshes.clear();
     await secrets.delete('campus');
     await db.remove('cache');
     await db.remove('confirmations');

@@ -37,7 +37,7 @@ class FeaturePage extends StatefulWidget {
   State<FeaturePage> createState() => _FeaturePageState();
 }
 
-class _FeaturePageState extends State<FeaturePage> with WidgetsBindingObserver {
+class _FeaturePageState extends State<FeaturePage> {
   late Future<Json> data;
   String semester = academicSemester(beijing(DateTime.now()));
   String assignmentTab = 'urgent';
@@ -46,6 +46,7 @@ class _FeaturePageState extends State<FeaturePage> with WidgetsBindingObserver {
   int urgentHours = 24;
   DateTime now = DateTime.now();
   Timer? ticker;
+  bool _refreshing = false;
   final exportKey = GlobalKey();
 
   AppServices get s => widget.services;
@@ -55,8 +56,7 @@ class _FeaturePageState extends State<FeaturePage> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    data = load();
+    data = load(refresh: s.claimInitialRefresh(widget.page));
     ticker = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() => now = DateTime.now());
     });
@@ -65,19 +65,25 @@ class _FeaturePageState extends State<FeaturePage> with WidgetsBindingObserver {
   @override
   void dispose() {
     ticker?.cancel();
-    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) refresh();
-  }
-
-  void refresh() {
-    setState(() {
-      data = load(refresh: true);
-    });
+  Future<void> refresh() async {
+    if (_refreshing) return;
+    _refreshing = true;
+    final next = load(refresh: true);
+    if (mounted) {
+      setState(() {
+        data = next;
+      });
+    }
+    try {
+      await next;
+    } catch (_) {
+      // FutureBuilder renders the page error; refresh controls should settle.
+    } finally {
+      _refreshing = false;
+    }
   }
 
   Future<Json> load({bool refresh = false}) async {
@@ -187,21 +193,7 @@ class _FeaturePageState extends State<FeaturePage> with WidgetsBindingObserver {
             Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Expanded(
-                  child: SingleChildScrollView(
-                    padding: EdgeInsets.fromLTRB(
-                      wide ? 38 : 16,
-                      wide ? 32 : 24,
-                      wide ? 38 : 16,
-                      100,
-                    ),
-                    child: FutureBuilder<Json>(
-                      future: data,
-                      builder: (context, snapshot) =>
-                          _mainContent(snapshot, wide: wide),
-                    ),
-                  ),
-                ),
+                Expanded(child: _scrollableContent(wide)),
                 if (wide && hasRightPanel) _rightPanel(constraints.maxWidth),
               ],
             ),
@@ -224,6 +216,29 @@ class _FeaturePageState extends State<FeaturePage> with WidgetsBindingObserver {
     },
   );
 
+  Widget _scrollableContent(bool wide) {
+    final scroll = SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: EdgeInsets.fromLTRB(
+        wide ? 38 : 16,
+        wide ? 32 : 24,
+        wide ? 38 : 16,
+        100,
+      ),
+      child: FutureBuilder<Json>(
+        future: data,
+        builder: (context, snapshot) => _mainContent(snapshot, wide: wide),
+      ),
+    );
+    if (wide || widget.page == '/school-info') return scroll;
+    return RefreshIndicator(
+      color: blue,
+      backgroundColor: paperCard,
+      onRefresh: refresh,
+      child: scroll,
+    );
+  }
+
   Widget _rightPanel(double width) => SizedBox(
     width: width >= 1200 ? 288 : 260,
     child: Container(
@@ -232,7 +247,15 @@ class _FeaturePageState extends State<FeaturePage> with WidgetsBindingObserver {
         border: Border(left: BorderSide(color: ink.withValues(alpha: .15))),
       ),
       padding: const EdgeInsets.fromLTRB(20, 28, 20, 100),
-      child: SingleChildScrollView(child: _rightPanelContent()),
+      child: RefreshIndicator(
+        color: blue,
+        backgroundColor: paperCard,
+        onRefresh: refresh,
+        child: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          child: _rightPanelContent(),
+        ),
+      ),
     ),
   );
 
@@ -277,9 +300,17 @@ class _FeaturePageState extends State<FeaturePage> with WidgetsBindingObserver {
     builder: (ctx) => StatefulBuilder(
       builder: (ctx, setSheetState) => SizedBox(
         height: MediaQuery.sizeOf(ctx).height * .82,
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
-          child: _rightPanelContent(onPanelChanged: () => setSheetState(() {})),
+        child: RefreshIndicator(
+          color: blue,
+          backgroundColor: paperCard,
+          onRefresh: refresh,
+          child: SingleChildScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
+            child: _rightPanelContent(
+              onPanelChanged: () => setSheetState(() {}),
+            ),
+          ),
         ),
       ),
     ),
@@ -312,11 +343,22 @@ class _FeaturePageState extends State<FeaturePage> with WidgetsBindingObserver {
       PageHead(
         title: title,
         subtitle: subtitle,
-        trailing: TextButton.icon(
-          onPressed: refresh,
-          icon: const Icon(Icons.refresh, size: 16),
-          label: const Text('刷新'),
-        ),
+        titleTrailing: widget.page == '/school-info'
+            ? IconButton(
+                onPressed: refresh,
+                tooltip: '刷新通知',
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                icon: const Icon(Icons.refresh, size: 18),
+              )
+            : null,
+        trailing: widget.page == '/school-info'
+            ? null
+            : TextButton.icon(
+                onPressed: refresh,
+                icon: const Icon(Icons.refresh, size: 16),
+                label: const Text('刷新'),
+              ),
       ),
       if (choices.isNotEmpty && (!wide || widget.page == '/exams'))
         _semesterPicker(choices),
@@ -738,11 +780,6 @@ class _FeaturePageState extends State<FeaturePage> with WidgetsBindingObserver {
                 onSelected: (_) => setState(() => noticeSource = choice.$1),
               ),
             ),
-          TextButton.icon(
-            onPressed: refresh,
-            icon: const Icon(Icons.refresh, size: 16),
-            label: const Text('刷新'),
-          ),
         ],
       ),
       if (failures.isNotEmpty)
@@ -2748,23 +2785,35 @@ class PageHead extends StatelessWidget {
     super.key,
     required this.title,
     this.subtitle,
+    this.titleTrailing,
     this.trailing,
   });
   final String title;
   final String? subtitle;
+  final Widget? titleTrailing;
   final Widget? trailing;
   @override
   Widget build(BuildContext context) {
     final heading = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          title,
-          style: const TextStyle(
-            fontSize: 27,
-            fontWeight: FontWeight.bold,
-            letterSpacing: 2,
-          ),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Text(
+              title,
+              style: const TextStyle(
+                fontSize: 27,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 2,
+              ),
+            ),
+            if (titleTrailing != null) ...[
+              const SizedBox(width: 8),
+              titleTrailing!,
+            ],
+          ],
         ),
         if (subtitle != null)
           Padding(
