@@ -2691,7 +2691,8 @@ class _ToolCardState extends State<ToolCard> {
   @override
   Widget build(BuildContext context) {
     final active = widget.onOpen != null && (hovered || pressed);
-    final iconColor = active ? paperCard : gold;
+    final iconColor = active ? paperCard : blue;
+    final iconAccent = active ? gold : blue;
     final titleColor = active ? gold : ink;
     return AnimatedSlide(
       offset: active ? const Offset(0, -.015) : Offset.zero,
@@ -2755,9 +2756,9 @@ class _ToolCardState extends State<ToolCard> {
                           height: 44,
                           alignment: Alignment.center,
                           decoration: BoxDecoration(
-                            color: active ? gold : gold.withValues(alpha: .05),
+                            color: active ? gold : blue.withValues(alpha: .05),
                             border: Border.all(
-                              color: gold.withValues(alpha: .6),
+                              color: iconAccent.withValues(alpha: .6),
                             ),
                             borderRadius: BorderRadius.circular(3),
                           ),
@@ -2832,7 +2833,7 @@ class _ToolCardState extends State<ToolCard> {
                           duration: const Duration(milliseconds: 180),
                           child: Text(
                             '↗',
-                            style: TextStyle(fontSize: 16, color: titleColor),
+                            style: const TextStyle(fontSize: 16, color: gold),
                           ),
                         ),
                       ],
