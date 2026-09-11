@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:zju_campus_agent/domain/models.dart';
 import 'package:zju_campus_agent/domain/schedule.dart';
 import 'package:zju_campus_agent/application/campus.dart';
+import 'package:zju_campus_agent/application/agent.dart';
 import 'package:zju_campus_agent/application/knowledge.dart';
 import 'package:zju_campus_agent/application/llm.dart';
 import 'package:zju_campus_agent/data/campus_session.dart';
@@ -164,4 +165,9 @@ void main() {
       expect(tokenize('选课规则'), containsAll(['选课', '课规', '规则']));
     },
   );
+  test('prompt catalog loads required chat instructions', () async {
+    final prompts = await loadPromptCatalog();
+    expect(text(prompts, 'SYSTEM_PROMPT_TPL'), isNotEmpty);
+    expect(text(prompts, 'GUIDE_RULES'), contains('__GUIDE_OUTLINE__'));
+  });
 }

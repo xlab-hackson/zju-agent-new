@@ -1303,59 +1303,51 @@ class _FeaturePageState extends State<FeaturePage> {
         children: [
           SizedBox(
             width: width,
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(minHeight: 138),
-              child: Kpi(
-                label: '本学期课程',
-                value: '$courses',
-                unit: '门',
-                foot: '秋冬课表',
-                icon: 'book-open',
-                onTap: () => context.go('/courses'),
-              ),
+            height: 154,
+            child: Kpi(
+              label: '本学期课程',
+              value: '$courses',
+              unit: '门',
+              foot: '秋冬课表',
+              icon: 'book-open',
+              onTap: () => context.go('/courses'),
             ),
           ),
           SizedBox(
             width: width,
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(minHeight: 138),
-              child: Kpi(
-                label: '待办作业',
-                value: '$assignments',
-                unit: '项待交',
-                foot: '截止一览',
-                icon: 'checklist-paper',
-                onTap: () => context.go('/assignments'),
-              ),
+            height: 154,
+            child: Kpi(
+              label: '待办作业',
+              value: '$assignments',
+              unit: '项待交',
+              foot: '截止一览',
+              icon: 'checklist-paper',
+              onTap: () => context.go('/assignments'),
             ),
           ),
           SizedBox(
             width: width,
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(minHeight: 138),
-              child: Kpi(
-                label: '考试安排',
-                value: '$exams',
-                unit: '场待考',
-                foot: '考场考签',
-                icon: 'exam-paper',
-                onTap: () => context.go('/exams'),
-              ),
+            height: 154,
+            child: Kpi(
+              label: '考试安排',
+              value: '$exams',
+              unit: '场待考',
+              foot: '考场考签',
+              icon: 'exam-paper',
+              onTap: () => context.go('/exams'),
             ),
           ),
           SizedBox(
             width: width,
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(minHeight: 138),
-              child: Kpi(
-                label: '下载中心',
-                value: '本地文库',
-                unit: '',
-                foot: '课件与资料',
-                icon: 'folder',
-                small: true,
-                onTap: () => context.go('/downloads'),
-              ),
+            height: 154,
+            child: Kpi(
+              label: '下载中心',
+              value: '本地文库',
+              unit: '',
+              foot: '课件与资料',
+              icon: 'folder',
+              small: true,
+              onTap: () => context.go('/downloads'),
             ),
           ),
         ],
@@ -2544,7 +2536,7 @@ class _KpiState extends State<Kpi> {
         curve: Curves.easeOut,
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: active ? gold.withValues(alpha: .07) : paperCard,
+          color: paperCard,
           border: Border.all(
             color: active
                 ? gold.withValues(alpha: .58)
@@ -2565,6 +2557,10 @@ class _KpiState extends State<Kpi> {
           color: Colors.transparent,
           child: InkWell(
             onTap: widget.onTap,
+            hoverColor: Colors.transparent,
+            focusColor: Colors.transparent,
+            highlightColor: Colors.transparent,
+            splashColor: Colors.transparent,
             onHover: (value) {
               if (mounted) setState(() => hovered = value);
             },
