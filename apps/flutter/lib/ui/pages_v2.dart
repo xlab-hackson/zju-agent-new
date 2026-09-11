@@ -1296,7 +1296,7 @@ class _FeaturePageState extends State<FeaturePage> {
           ? 2
           : 1;
       const gap = 6.0;
-      const cardHeight = 190.0;
+      const cardHeight = 170.0;
       final width = (constraints.maxWidth - gap * (columns - 1)) / columns;
       return Wrap(
         spacing: gap,
@@ -2601,37 +2601,46 @@ class _KpiState extends State<Kpi> {
                     ],
                   ),
                   const SizedBox(height: 10),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Flexible(
-                        child: FittedBox(
-                          fit: BoxFit.scaleDown,
-                          alignment: Alignment.centerLeft,
-                          child: Text(
-                            widget.value,
-                            maxLines: 1,
-                            style: TextStyle(
-                              fontSize: widget.small ? 20 : 36,
-                              fontWeight: FontWeight.bold,
-                              color: color,
-                            ),
-                          ),
-                        ),
-                      ),
-                      if (widget.unit.isNotEmpty)
+                  SizedBox(
+                    height: 44,
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
                         Flexible(
-                          child: Padding(
-                            padding: const EdgeInsets.only(left: 4, bottom: 5),
+                          child: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            alignment: Alignment.centerLeft,
                             child: Text(
-                              widget.unit,
+                              widget.value,
                               maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(fontSize: 11, color: ink),
+                              style: TextStyle(
+                                fontSize: widget.small ? 28 : 36,
+                                fontWeight: FontWeight.bold,
+                                color: color,
+                              ),
                             ),
                           ),
                         ),
-                    ],
+                        if (widget.unit.isNotEmpty)
+                          Flexible(
+                            child: Padding(
+                              padding: const EdgeInsets.only(
+                                left: 4,
+                                bottom: 5,
+                              ),
+                              child: Text(
+                                widget.unit,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  color: ink,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
                   const Divider(height: 18),
                   Row(
