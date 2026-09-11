@@ -354,10 +354,10 @@ class _FeaturePageState extends State<FeaturePage> {
             : null,
         trailing: widget.page == '/school-info'
             ? null
-            : TextButton.icon(
+            : IconButton(
                 onPressed: refresh,
-                icon: const Icon(Icons.refresh, size: 16),
-                label: const Text('刷新'),
+                tooltip: '刷新',
+                icon: const Icon(Icons.refresh, size: 18),
               ),
       ),
       if (choices.isNotEmpty && (!wide || widget.page == '/exams'))
@@ -506,10 +506,10 @@ class _FeaturePageState extends State<FeaturePage> {
               icon: const Icon(Icons.table_chart_outlined, size: 16),
               label: const Text('导出 Excel'),
             ),
-            TextButton.icon(
+            IconButton(
               onPressed: refresh,
-              icon: const Icon(Icons.refresh, size: 16),
-              label: const Text('刷新'),
+              tooltip: '刷新课程表',
+              icon: const Icon(Icons.refresh, size: 18),
             ),
           ],
         ),
@@ -1022,17 +1022,28 @@ class _FeaturePageState extends State<FeaturePage> {
       children: [
         Row(
           children: [
-            Text(
-              '${DateTime.now().year} 年   ${_monthName(DateTime.now().month)} ${DateTime.now().day}   ${_weekday(DateTime.now().weekday)}',
-              style: const TextStyle(
-                color: gold,
-                fontSize: 12,
-                letterSpacing: 2,
+            Expanded(
+              child: Text(
+                '${DateTime.now().year} 年   ${_monthName(DateTime.now().month)} ${DateTime.now().day}   ${_weekday(DateTime.now().weekday)}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: gold,
+                  fontSize: 12,
+                  letterSpacing: 2,
+                ),
               ),
             ),
             const SizedBox(width: 12),
             Expanded(
               child: Container(height: 1, color: gold.withValues(alpha: .45)),
+            ),
+            IconButton(
+              onPressed: refresh,
+              tooltip: '刷新工作台',
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+              icon: const Icon(Icons.refresh, size: 18),
             ),
           ],
         ),
