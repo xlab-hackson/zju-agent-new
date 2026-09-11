@@ -10,6 +10,8 @@ import 'package:zju_campus_agent/application/llm.dart';
 import 'package:zju_campus_agent/data/campus_session.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   test('semester boundaries follow Beijing date', () {
     expect(academicSemester(DateTime.utc(2026, 1, 25)), '2025-2026-1');
     expect(academicSemester(DateTime.utc(2026, 1, 26)), '2025-2026-2');

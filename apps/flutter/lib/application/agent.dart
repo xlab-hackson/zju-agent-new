@@ -10,29 +10,33 @@ import 'files.dart';
 import 'knowledge.dart';
 import 'llm.dart';
 
-const _fallbackPrompts = <String, dynamic>{
-  'SYSTEM_PROMPT_TPL':
-      '你是浙江大学校园智能助手。请基于工具返回的真实数据回答问题。\n\n当前时间：__DATETIME__。__PERIOD__。',
-  'GUIDE_RULES':
-      '关于浙大校园常识，优先使用知识库工具；检索不到时请如实说明。\n\n知识库章节目录：\n__GUIDE_OUTLINE__',
-  'BRIEF_RULES': '请用简洁中文回答，不要输出表格或代码块。',
-};
-
 Future<Json> loadPromptCatalog() async {
+  late final String raw;
   try {
-    final prompts = object(
-      jsonDecode(await rootBundle.loadString('assets/prompts.json')),
-    );
-    if (text(prompts, 'SYSTEM_PROMPT_TPL').trim().isEmpty ||
-        text(prompts, 'GUIDE_RULES').trim().isEmpty) {
-      throw const FormatException('提示词缺少必要字段');
-    }
-    return prompts;
+    raw = await rootBundle.loadString('assets/prompts.json', cache: false);
   } catch (_) {
-    // A packaged desktop build can briefly miss a newly updated asset during
-    // hot restart. Keep chat usable with a minimal local prompt in that case.
-    return _fallbackPrompts;
+    throw const AppError(
+      'PROMPT_ASSET_MISSING',
+      '聊天提示词资源读取失败，请重启应用；若仍失败请重新安装当前版本。',
+    );
   }
+
+  late final Json prompts;
+  try {
+    prompts = object(jsonDecode(raw));
+  } catch (_) {
+    throw const AppError('PROMPT_ASSET_INVALID', '聊天提示词资源格式无效，请更新或重新安装当前版本。');
+  }
+
+  for (final key in const ['SYSTEM_PROMPT_TPL', 'GUIDE_RULES', 'BRIEF_RULES']) {
+    if (text(prompts, key).trim().isEmpty) {
+      throw const AppError(
+        'PROMPT_ASSET_INCOMPLETE',
+        '聊天提示词资源缺少必要内容，请更新或重新安装当前版本。',
+      );
+    }
+  }
+  return prompts;
 }
 
 class AgentService {
@@ -375,8 +379,9 @@ class AgentService {
         throw const AppError('LLM_CONFIG_INVALID', '请先配置模型来源。');
       }
       final provider = providers.first;
-      stage = '加载聊天提示词';
+      stage = '读取聊天提示词资产';
       final prompts = await loadPromptCatalog();
+      stage = '组装聊天提示词';
       final system =
           '${text(prompts, 'SYSTEM_PROMPT_TPL').replaceAll('__DATETIME__', beijing(DateTime.now()).toIso8601String()).replaceAll('__PERIOD__', academicSemester(beijing(DateTime.now())))}\n${text(prompts, 'GUIDE_RULES').replaceAll('__GUIDE_OUTLINE__', guide.outline)}\n称呼用户：${settings['nickname'] ?? ''}\n用户自述：${settings['personaPrompt'] ?? ''}${widget ? '\n${prompts['BRIEF_RULES']}' : ''}';
       for (var r = round; r < 8; r++) {

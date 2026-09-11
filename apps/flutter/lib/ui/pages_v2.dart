@@ -1296,6 +1296,7 @@ class _FeaturePageState extends State<FeaturePage> {
           ? 2
           : 1;
       const gap = 6.0;
+      const cardHeight = 220.0;
       final width = (constraints.maxWidth - gap * (columns - 1)) / columns;
       return Wrap(
         spacing: gap,
@@ -1303,7 +1304,7 @@ class _FeaturePageState extends State<FeaturePage> {
         children: [
           SizedBox(
             width: width,
-            height: 154,
+            height: cardHeight,
             child: Kpi(
               label: '本学期课程',
               value: '$courses',
@@ -1315,7 +1316,7 @@ class _FeaturePageState extends State<FeaturePage> {
           ),
           SizedBox(
             width: width,
-            height: 154,
+            height: cardHeight,
             child: Kpi(
               label: '待办作业',
               value: '$assignments',
@@ -1327,7 +1328,7 @@ class _FeaturePageState extends State<FeaturePage> {
           ),
           SizedBox(
             width: width,
-            height: 154,
+            height: cardHeight,
             child: Kpi(
               label: '考试安排',
               value: '$exams',
@@ -1339,7 +1340,7 @@ class _FeaturePageState extends State<FeaturePage> {
           ),
           SizedBox(
             width: width,
-            height: 154,
+            height: cardHeight,
             child: Kpi(
               label: '下载中心',
               value: '本地文库',
