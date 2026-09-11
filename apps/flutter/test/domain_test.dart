@@ -131,6 +131,11 @@ void main() {
       modelEndpoint('https://api.anthropic.com/v1/', 'anthropic').path,
       '/v1/messages',
     );
+    expect(modelListEndpoint('https://api.openai.com').path, '/v1/models');
+    expect(
+      modelListEndpoint('https://open.bigmodel.cn/api/paas/v4').path,
+      '/api/paas/v4/models',
+    );
     expect(
       () => modelEndpoint('http://example.com', 'openai'),
       throwsA(isA<AppError>()),

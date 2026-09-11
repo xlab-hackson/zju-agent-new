@@ -1,8 +1,9 @@
 import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import '../domain/models.dart';
 
-Uri modelEndpoint(String base, String protocol) {
+Uri _modelServiceBase(String base) {
   final uri = Uri.parse(base);
   if (uri.scheme != 'https' &&
       !(uri.scheme == 'http' &&
@@ -14,9 +15,20 @@ Uri modelEndpoint(String base, String protocol) {
   }
   var path = uri.path.replaceAll(RegExp(r'/+$'), '');
   if (!RegExp(r'/v\d+(?:[a-z0-9.-]*)?(?:/|$)').hasMatch(path)) path += '/v1';
+  return uri.replace(path: path);
+}
+
+Uri modelEndpoint(String base, String protocol) {
+  final uri = _modelServiceBase(base);
   return uri.replace(
-    path: '$path/${protocol == 'anthropic' ? 'messages' : 'chat/completions'}',
+    path:
+        '${uri.path}/${protocol == 'anthropic' ? 'messages' : 'chat/completions'}',
   );
+}
+
+Uri modelListEndpoint(String base) {
+  final uri = _modelServiceBase(base);
+  return uri.replace(path: '${uri.path}/models');
 }
 
 Stream<String> sseData(Stream<List<int>> bytes) async* {
@@ -51,6 +63,111 @@ class ModelClient {
             ),
           );
   final Dio dio;
+
+  Map<String, String> _authHeaders(String apiKey, String protocol) => {
+    if (protocol == 'anthropic')
+      'x-api-key': apiKey
+    else
+      'Authorization': 'Bearer $apiKey',
+    if (protocol == 'anthropic') 'anthropic-version': '2023-06-01',
+    'Content-Type': 'application/json',
+  };
+
+  Future<List<String>> listModels(Json provider) async {
+    final protocol = text(provider, 'protocol', 'openai');
+    if (protocol == 'anthropic') {
+      throw const AppError(
+        'LLM_MODELS_UNAVAILABLE',
+        '当前协议没有统一的模型列表接口，请手动填写模型名称。',
+      );
+    }
+    final apiKey = text(provider, 'apiKey').trim();
+    if (apiKey.isEmpty) {
+      throw const AppError('LLM_CONFIG_INVALID', '请先填写 API Key。');
+    }
+    try {
+      final response = await dio.getUri<dynamic>(
+        modelListEndpoint(text(provider, 'baseUrl')),
+        options: Options(headers: _authHeaders(apiKey, protocol)),
+      );
+      final status = response.statusCode ?? 500;
+      if (status < 200 || status >= 300) {
+        throw AppError('LLM_REQUEST_FAILED', '模型服务返回 HTTP $status，请检查配置。');
+      }
+      final payload = response.data;
+      final raw = payload is Map
+          ? (payload['data'] ?? payload['models'])
+          : payload;
+      if (raw is! List) {
+        throw const AppError('LLM_MODELS_INVALID', '模型服务返回的数据格式无法识别。');
+      }
+      final models =
+          raw
+              .map((item) {
+                if (item is String) return item.trim();
+                if (item is Map) {
+                  final id = item['id'] ?? item['name'];
+                  return id is String ? id.trim() : '';
+                }
+                return '';
+              })
+              .where((item) => item.isNotEmpty)
+              .toSet()
+              .toList()
+            ..sort();
+      if (models.isEmpty) {
+        throw const AppError('LLM_MODELS_EMPTY', 'API 地址没有返回可用模型。');
+      }
+      return models;
+    } on DioException catch (e) {
+      throw _requestError(e);
+    }
+  }
+
+  /// Sends the smallest non-streaming request needed to verify that the
+  /// configured endpoint, API key, and model can work together.
+  Future<void> checkAvailability(Json provider) async {
+    final protocol = text(provider, 'protocol', 'openai');
+    final endpoint = modelEndpoint(text(provider, 'baseUrl'), protocol);
+    final apiKey = text(provider, 'apiKey');
+    final model = text(provider, 'model').trim();
+    if (apiKey.isEmpty || model.isEmpty) {
+      throw const AppError('LLM_CONFIG_INVALID', '请先填写模型名称和 API Key。');
+    }
+    final body = <String, dynamic>{
+      'model': model,
+      'max_tokens': 1,
+      'messages': const [
+        {'role': 'user', 'content': 'ping'},
+      ],
+    };
+    try {
+      final response = await dio.postUri<dynamic>(
+        endpoint,
+        data: body,
+        options: Options(headers: _authHeaders(apiKey, protocol)),
+      );
+      final status = response.statusCode ?? 500;
+      if (status < 200 || status >= 300) {
+        throw AppError('LLM_REQUEST_FAILED', '模型服务返回 HTTP $status，请检查配置。');
+      }
+    } on DioException catch (e) {
+      throw _requestError(e);
+    }
+  }
+
+  AppError _requestError(DioException error) {
+    final status = error.response?.statusCode;
+    return AppError('LLM_REQUEST_FAILED', switch (status) {
+      401 => '模型服务拒绝认证（HTTP 401），请检查 API Key。',
+      403 => '模型服务拒绝访问（HTTP 403），请检查账号和模型权限。',
+      404 => '模型接口不存在（HTTP 404），请检查 API 地址和模型名称。',
+      429 => '模型请求受限（HTTP 429），请检查额度或稍后重试。',
+      final int code => '模型服务返回 HTTP $code，请检查配置。',
+      _ => '模型连接失败，请检查网络和 API 地址。',
+    });
+  }
+
   Stream<AgentEvent> complete(
     Json provider,
     List<Json> messages,

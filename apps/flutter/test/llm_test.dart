@@ -33,6 +33,31 @@ class StreamAdapter implements HttpClientAdapter {
   void close({bool force = false}) {}
 }
 
+class JsonAdapter implements HttpClientAdapter {
+  JsonAdapter(this.payload, {this.status = 200, this.check});
+  final Object payload;
+  final int status;
+  final void Function(RequestOptions)? check;
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    check?.call(options);
+    return ResponseBody(
+      Stream.value(Uint8List.fromList(utf8.encode(jsonEncode(payload)))),
+      status,
+      headers: {
+        'content-type': ['application/json'],
+      },
+    );
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
+
 const testProvider = {
   'baseUrl': 'https://model.example/v1',
   'model': 'test-model',
@@ -216,6 +241,49 @@ void main() {
                 'redaction',
                 isNot(contains('secret-key')),
               ),
+        ),
+      );
+    },
+  );
+  test(
+    'reads and deduplicates OpenAI models from the configured base URL',
+    () async {
+      final client = ModelClient(
+        client: Dio()
+          ..httpClientAdapter = JsonAdapter(
+            {
+              'data': [
+                {'id': 'gpt-4o'},
+                {'id': 'gpt-4o'},
+                {'id': 'deepseek-chat'},
+              ],
+            },
+            check: (options) {
+              expect(options.method, 'GET');
+              expect(options.uri.path, '/v1/models');
+              expect(options.headers['Authorization'], 'Bearer test-key');
+            },
+          ),
+      );
+      expect(await client.listModels(testProvider), [
+        'deepseek-chat',
+        'gpt-4o',
+      ]);
+    },
+  );
+
+  test(
+    'Anthropic model listing explains that manual model entry is required',
+    () async {
+      final client = ModelClient();
+      await expectLater(
+        client.listModels({...testProvider, 'protocol': 'anthropic'}),
+        throwsA(
+          isA<AppError>().having(
+            (e) => e.code,
+            'code',
+            'LLM_MODELS_UNAVAILABLE',
+          ),
         ),
       );
     },

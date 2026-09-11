@@ -14,6 +14,7 @@ import '../application/services.dart';
 import '../domain/models.dart';
 import '../domain/schedule.dart';
 import 'export.dart';
+import 'avatar.dart';
 import 'theme.dart';
 
 const _dayNames = ['一', '二', '三', '四', '五', '六', '日'];
@@ -343,22 +344,11 @@ class _FeaturePageState extends State<FeaturePage> {
       PageHead(
         title: title,
         subtitle: subtitle,
-        titleTrailing: widget.page == '/school-info'
-            ? IconButton(
-                onPressed: refresh,
-                tooltip: '刷新通知',
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-                icon: const Icon(Icons.refresh, size: 18),
-              )
-            : null,
-        trailing: widget.page == '/school-info'
-            ? null
-            : IconButton(
-                onPressed: refresh,
-                tooltip: '刷新',
-                icon: const Icon(Icons.refresh, size: 18),
-              ),
+        trailing: IconButton(
+          onPressed: refresh,
+          tooltip: widget.page == '/school-info' ? '刷新通知' : '刷新',
+          icon: const Icon(Icons.refresh, size: 18),
+        ),
       ),
       if (choices.isNotEmpty && (!wide || widget.page == '/exams'))
         _semesterPicker(choices),
@@ -970,9 +960,10 @@ class _FeaturePageState extends State<FeaturePage> {
     final name = text(settings, 'nickname').trim().isEmpty
         ? '浙大学子'
         : text(settings, 'nickname');
+    final avatarDataUrl = text(settings, 'avatarDataUrl');
     final campusStatus = text(d, 'campusStatus', 'missing');
     return [
-      _dashboardHeader(name, dateInfo, campusStatus),
+      _dashboardHeader(name, dateInfo, campusStatus, avatarDataUrl),
       ChapterHead(
         juan: '卷一',
         title: '接下来',
@@ -1015,6 +1006,7 @@ class _FeaturePageState extends State<FeaturePage> {
     String name,
     Json info,
     String campusStatus,
+    String avatarDataUrl,
   ) => Padding(
     padding: const EdgeInsets.only(bottom: 30),
     child: Column(
@@ -1051,12 +1043,16 @@ class _FeaturePageState extends State<FeaturePage> {
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            UserAvatar(dataUrl: avatarDataUrl, radius: 28),
+            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
                     '你好，$name',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       fontSize: 34,
                       fontWeight: FontWeight.w900,
@@ -1307,47 +1303,59 @@ class _FeaturePageState extends State<FeaturePage> {
         children: [
           SizedBox(
             width: width,
-            child: Kpi(
-              label: '本学期课程',
-              value: '$courses',
-              unit: '门',
-              foot: '秋冬课表',
-              icon: 'book-open',
-              onTap: () => context.go('/courses'),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 138),
+              child: Kpi(
+                label: '本学期课程',
+                value: '$courses',
+                unit: '门',
+                foot: '秋冬课表',
+                icon: 'book-open',
+                onTap: () => context.go('/courses'),
+              ),
             ),
           ),
           SizedBox(
             width: width,
-            child: Kpi(
-              label: '待办作业',
-              value: '$assignments',
-              unit: '项待交',
-              foot: '截止一览',
-              icon: 'checklist-paper',
-              onTap: () => context.go('/assignments'),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 138),
+              child: Kpi(
+                label: '待办作业',
+                value: '$assignments',
+                unit: '项待交',
+                foot: '截止一览',
+                icon: 'checklist-paper',
+                onTap: () => context.go('/assignments'),
+              ),
             ),
           ),
           SizedBox(
             width: width,
-            child: Kpi(
-              label: '考试安排',
-              value: '$exams',
-              unit: '场待考',
-              foot: '考场考签',
-              icon: 'exam-paper',
-              onTap: () => context.go('/exams'),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 138),
+              child: Kpi(
+                label: '考试安排',
+                value: '$exams',
+                unit: '场待考',
+                foot: '考场考签',
+                icon: 'exam-paper',
+                onTap: () => context.go('/exams'),
+              ),
             ),
           ),
           SizedBox(
             width: width,
-            child: Kpi(
-              label: '下载中心',
-              value: '本地文库',
-              unit: '',
-              foot: '课件与资料',
-              icon: 'folder',
-              small: true,
-              onTap: () => context.go('/downloads'),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 138),
+              child: Kpi(
+                label: '下载中心',
+                value: '本地文库',
+                unit: '',
+                foot: '课件与资料',
+                icon: 'folder',
+                small: true,
+                onTap: () => context.go('/downloads'),
+              ),
             ),
           ),
         ],
@@ -1380,6 +1388,7 @@ class _FeaturePageState extends State<FeaturePage> {
             for (final tool in tools)
               SizedBox(
                 width: width,
+                height: 200,
                 child: ToolCard(
                   title: tool.$1,
                   icon: tool.$2,
@@ -1640,36 +1649,39 @@ class CourseRightPanel extends StatelessWidget {
             for (final course in group.value)
               Padding(
                 padding: const EdgeInsets.only(bottom: 6),
-                child: OutlinedButton(
-                  onPressed: () => onSelect(course),
-                  style: OutlinedButton.styleFrom(
-                    alignment: Alignment.centerLeft,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 10,
-                    ),
-                    side: BorderSide(color: ink.withValues(alpha: .12)),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        text(course, 'name'),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                        ),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton(
+                    onPressed: () => onSelect(course),
+                    style: OutlinedButton.styleFrom(
+                      alignment: Alignment.centerLeft,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 10,
                       ),
-                      if (text(course, 'teachingClassName').isNotEmpty)
+                      side: BorderSide(color: ink.withValues(alpha: .12)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
                         Text(
-                          text(course, 'teachingClassName'),
+                          text(course, 'name'),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 10, color: ink),
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
-                    ],
+                        if (text(course, 'teachingClassName').isNotEmpty)
+                          Text(
+                            text(course, 'teachingClassName'),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 10, color: ink),
+                          ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -2497,7 +2509,7 @@ class TimetableView extends StatelessWidget {
   );
 }
 
-class Kpi extends StatelessWidget {
+class Kpi extends StatefulWidget {
   const Kpi({
     super.key,
     required this.label,
@@ -2511,65 +2523,154 @@ class Kpi extends StatelessWidget {
   final String label, value, unit, foot, icon;
   final VoidCallback? onTap;
   final bool small;
+
   @override
-  Widget build(BuildContext context) => InkWell(
-    onTap: onTap,
-    child: Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: paperCard,
-        border: Border.all(color: ink.withValues(alpha: .12)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  label,
-                  style: const TextStyle(fontSize: 12, color: ink),
-                ),
-              ),
-              SvgPicture.asset(
-                'assets/icons/$icon.svg',
-                width: 17,
-                height: 17,
-                colorFilter: ColorFilter.mode(
-                  blue.withValues(alpha: .8),
-                  BlendMode.srcIn,
-                ),
-              ),
-            ],
+  State<Kpi> createState() => _KpiState();
+}
+
+class _KpiState extends State<Kpi> {
+  bool hovered = false, pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = hovered || pressed;
+    final color = active ? gold : blue;
+    return AnimatedSlide(
+      offset: active ? const Offset(0, -.015) : Offset.zero,
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOut,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOut,
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: active ? gold.withValues(alpha: .07) : paperCard,
+          border: Border.all(
+            color: active
+                ? gold.withValues(alpha: .58)
+                : ink.withValues(alpha: .12),
           ),
-          const SizedBox(height: 10),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text(
-                value,
-                style: TextStyle(
-                  fontSize: small ? 20 : 36,
-                  fontWeight: FontWeight.bold,
-                  color: blue,
-                ),
-              ),
-              if (unit.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(left: 4, bottom: 5),
-                  child: Text(
-                    unit,
-                    style: const TextStyle(fontSize: 11, color: ink),
+          borderRadius: BorderRadius.circular(3),
+          boxShadow: active
+              ? const [
+                  BoxShadow(
+                    color: Color(0x1f0e1c38),
+                    offset: Offset(1, 4),
+                    blurRadius: 8,
                   ),
-                ),
-            ],
+                ]
+              : const [],
+        ),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: widget.onTap,
+            onHover: (value) {
+              if (mounted) setState(() => hovered = value);
+            },
+            onHighlightChanged: (value) {
+              if (mounted) setState(() => pressed = value);
+            },
+            borderRadius: BorderRadius.circular(3),
+            child: Padding(
+              padding: const EdgeInsets.all(1),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          widget.label,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: 12, color: color),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      AnimatedRotation(
+                        turns: active ? -.017 : 0,
+                        duration: const Duration(milliseconds: 180),
+                        child: SvgPicture.asset(
+                          'assets/icons/${widget.icon}.svg',
+                          width: 17,
+                          height: 17,
+                          colorFilter: ColorFilter.mode(
+                            color.withValues(alpha: .85),
+                            BlendMode.srcIn,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Flexible(
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            widget.value,
+                            maxLines: 1,
+                            style: TextStyle(
+                              fontSize: widget.small ? 20 : 36,
+                              fontWeight: FontWeight.bold,
+                              color: color,
+                            ),
+                          ),
+                        ),
+                      ),
+                      if (widget.unit.isNotEmpty)
+                        Flexible(
+                          child: Padding(
+                            padding: const EdgeInsets.only(left: 4, bottom: 5),
+                            child: Text(
+                              widget.unit,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 11, color: ink),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                  const Divider(height: 18),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          widget.foot,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: gold,
+                            decoration: active
+                                ? TextDecoration.underline
+                                : TextDecoration.none,
+                          ),
+                        ),
+                      ),
+                      AnimatedSlide(
+                        offset: active ? const Offset(.15, 0) : Offset.zero,
+                        duration: const Duration(milliseconds: 180),
+                        child: Text(
+                          '→',
+                          style: TextStyle(fontSize: 16, color: color),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
           ),
-          const Divider(height: 18),
-          Text(foot, style: const TextStyle(fontSize: 11, color: gold)),
-        ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class ToolCard extends StatelessWidget {
@@ -2796,35 +2897,23 @@ class PageHead extends StatelessWidget {
     super.key,
     required this.title,
     this.subtitle,
-    this.titleTrailing,
     this.trailing,
   });
   final String title;
   final String? subtitle;
-  final Widget? titleTrailing;
   final Widget? trailing;
   @override
   Widget build(BuildContext context) {
     final heading = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            Text(
-              title,
-              style: const TextStyle(
-                fontSize: 27,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 2,
-              ),
-            ),
-            if (titleTrailing != null) ...[
-              const SizedBox(width: 8),
-              titleTrailing!,
-            ],
-          ],
+        Text(
+          title,
+          style: const TextStyle(
+            fontSize: 27,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 2,
+          ),
         ),
         if (subtitle != null)
           Padding(

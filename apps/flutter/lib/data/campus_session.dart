@@ -356,7 +356,18 @@ class CampusSession {
     // Upstream stops here: the menu is not fetched and is not parsed for auth keywords.
   }
 
-  Future<void> ensure(String service) => _ensure(_state, service);
+  Future<void> ensure(String service) async {
+    try {
+      await _ensure(_state, service);
+      if (service == 'cas') _authStatus = 'connected';
+    } on AppError catch (e) {
+      if (e.code == 'ZJU_AUTH_FAILED' || e.code == 'ZJU_CREDENTIAL_MISSING') {
+        _authStatus = 'invalid';
+      }
+      rethrow;
+    }
+  }
+
   Future<void> _ensure(_LoginState state, String service) {
     _check(state);
     if (!state.jars.containsKey(service)) {
