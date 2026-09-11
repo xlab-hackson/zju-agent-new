@@ -20,20 +20,50 @@ class CampusService {
   );
   static const coursesBase = 'https://courses.zju.edu.cn';
   static const zdbkBase = 'https://zdbk.zju.edu.cn/jwglxt';
+  static const cacheValidity = Duration(days: 1);
   final Set<String> stale = {};
+
+  DateTime? _cacheTime(Json? value) {
+    if (value == null) return null;
+    return DateTime.tryParse(text(value, 'updatedAt'))?.toUtc();
+  }
+
+  bool _isFresh(DateTime? time) =>
+      time != null && DateTime.now().toUtc().difference(time) < cacheValidity;
+
+  Future<DateTime?> oldestUpdatedAt({
+    Iterable<String> cacheKeys = const [],
+    Iterable<String> cachePrefixes = const [],
+    Iterable<String> calendarKeys = const [],
+  }) async {
+    final times = <DateTime>[];
+    for (final key in cacheKeys) {
+      final time = _cacheTime(await db.get('cache', key));
+      if (time != null) times.add(time);
+    }
+    for (final prefix in cachePrefixes) {
+      for (final key in await db.ids('cache', prefix: prefix)) {
+        final time = _cacheTime(await db.get('cache', key));
+        if (time != null) times.add(time);
+      }
+    }
+    for (final key in calendarKeys) {
+      final time = await db.updatedAt('calendars', key);
+      if (time != null) times.add(time);
+    }
+    if (times.isEmpty) return null;
+    return times.reduce((a, b) => a.isBefore(b) ? a : b);
+  }
+
   Future<List<Json>> cached(
     String key,
     Future<List<Json>> Function() fetch, {
     bool refresh = false,
   }) async {
     final cache = await db.get('cache', key);
-    if (!refresh &&
-        cache != null &&
-        DateTime.now()
-                .difference(DateTime.parse(text(cache, 'updatedAt')))
-                .inMinutes <
-            5) {
-      return rows(cache['items']);
+    if (!refresh && _isFresh(_cacheTime(cache))) {
+      stale.remove(key);
+      return rows(cache!['items']);
     }
     try {
       final items = await fetch();
@@ -99,7 +129,7 @@ class CampusService {
           .toList();
     }, refresh: refresh);
     if (semesterId == null) return all;
-    final ids = (await semesters())
+    final ids = (await semesters(refresh: refresh))
         .where(
           (s) =>
               s['id'] == semesterId ||
@@ -126,8 +156,9 @@ class CampusService {
   }
 
   Future<List<Json>> materials(
-    String courseId,
-  ) => cached('materials:$courseId', () async {
+    String courseId, {
+    bool refresh = false,
+  }) => cached('materials:$courseId', () async {
     final url =
         Uri.parse(
           '$coursesBase/api/course/${Uri.encodeComponent(courseId)}/coursewares',
@@ -161,7 +192,7 @@ class CampusService {
           },
         )
         .toList();
-  });
+  }, refresh: refresh);
   Future<List<Json>> assignments({
     String? courseId,
     String? semesterId,
@@ -203,8 +234,9 @@ class CampusService {
   }
 
   Future<List<Json>> quizzes(
-    String courseId,
-  ) => cached('quizzes:$courseId', () async {
+    String courseId, {
+    bool refresh = false,
+  }) => cached('quizzes:$courseId', () async {
     final j = await session.json(
       'courses',
       '$coursesBase/api/courses/${Uri.encodeComponent(courseId)}/exam-list?page=1&page_size=100',
@@ -223,7 +255,7 @@ class CampusService {
           },
         )
         .toList();
-  });
+  }, refresh: refresh);
   Future<List<TimetableEntry>> timetable(
     String semester, {
     bool refresh = false,
@@ -287,8 +319,9 @@ class CampusService {
     return result..sort((a, b) => text(a, 'time').compareTo(text(b, 'time')));
   }, refresh: refresh);
   Future<List<Json>> grades(
-    String semester,
-  ) => cached('grades:$semester', () async {
+    String semester, {
+    bool refresh = false,
+  }) => cached('grades:$semester', () async {
     final j = await session.json(
       'zdbk',
       '$zdbkBase/cxdy/xscjcx_cxXscjIndex.html?doType=query&queryModel.showCount=5000',
@@ -316,10 +349,17 @@ class CampusService {
             included && !['合格', '不合格'].contains(grade) && !id.contains('xtwkc'),
       };
     }).toList();
-  });
-  Future<Json> notices() async {
+  }, refresh: refresh);
+  Future<Json> notices({bool refresh = false}) async {
     final items = <Json>[], failures = <String>[];
     for (final source in ['sztz', 'zdbk']) {
+      final key = 'notices:$source', saved = await db.get('cache', key);
+      final savedAt = _cacheTime(saved);
+      if (!refresh && _isFresh(savedAt)) {
+        stale.remove(key);
+        items.addAll(rows(saved?['items']));
+        continue;
+      }
       try {
         final r = source == 'sztz'
             ? await publicClient.get<dynamic>(
@@ -343,10 +383,14 @@ class CampusService {
         final j = object(r.data is String ? jsonDecode(r.data) : r.data);
         final parsed = parseNotices(j, source);
         items.addAll(parsed);
-        await db.put('cache', 'notices:$source', {'items': parsed});
+        await db.put('cache', key, {
+          'items': parsed,
+          'updatedAt': DateTime.now().toUtc().toIso8601String(),
+        });
+        stale.remove(key);
       } catch (_) {
+        stale.add(key);
         failures.add('${source == 'sztz' ? '素质拓展' : '教务'}通知刷新失败');
-        final saved = await db.get('cache', 'notices:$source');
         if (saved != null) items.addAll(rows(saved['items']));
       }
     }
@@ -361,12 +405,25 @@ class CampusService {
             )
           : text(b, 'date').compareTo(text(a, 'date')),
     );
-    return {'items': items, 'failures': failures};
+    final updated = <DateTime>[];
+    for (final source in ['sztz', 'zdbk']) {
+      final time = _cacheTime(await db.get('cache', 'notices:$source'));
+      if (time != null) updated.add(time);
+    }
+    return {
+      'items': items,
+      'failures': failures,
+      if (updated.isNotEmpty)
+        'updatedAt': updated
+            .reduce((a, b) => a.isBefore(b) ? a : b)
+            .toIso8601String(),
+    };
   }
 
-  Future<Json> calendar(String semester) async {
+  Future<Json> calendar(String semester, {bool refresh = false}) async {
     final saved = await db.get('calendars', semester);
-    if (saved != null) return saved;
+    final savedAt = await db.updatedAt('calendars', semester);
+    if (!refresh && saved != null && _isFresh(savedAt)) return saved;
     try {
       final r = await publicClient.get<dynamic>(
         'http://calendar.celechron.top/${Uri.encodeComponent(semester)}.json',
@@ -374,12 +431,21 @@ class CampusService {
       );
       final j = object(r.data is String ? jsonDecode(r.data) : r.data);
       if (j['startEnd'] is List && (j['startEnd'] as List).length == 4) {
-        final config = {...j, 'semesterId': semester};
+        final config = {
+          ...j,
+          'semesterId': semester,
+          'updatedAt': DateTime.now().toUtc().toIso8601String(),
+        };
         await db.put('calendars', semester, config);
+        stale.remove('calendar:$semester');
         return config;
       }
     } catch (_) {
       /* Bundled calendar is available offline. */
+    }
+    if (saved != null) {
+      stale.add('calendar:$semester');
+      return saved;
     }
     final bundled = object(
       jsonDecode(await rootBundle.loadString('assets/calendars.json')),
@@ -388,12 +454,12 @@ class CampusService {
     throw const AppError('ZJU_SERVICE_UNAVAILABLE', '该学期校历尚未收录，无法准确计算日程。');
   }
 
-  Future<Json> daily(DateTime wall) async {
+  Future<Json> daily(DateTime wall, {bool refresh = false}) async {
     final semester = academicSemester(wall),
-        config = await calendar(academicSemester(wall));
-    final table = await timetable(semester),
-        tests = await exams(semester),
-        work = await assignments(semesterId: semester);
+        config = await calendar(semester, refresh: refresh);
+    final table = await timetable(semester, refresh: refresh),
+        tests = await exams(semester, refresh: refresh),
+        work = await assignments(semesterId: semester, refresh: refresh);
     return {
       'date': isoDay(wall),
       'dateInfo': dateInfo(wall, config),
@@ -401,15 +467,37 @@ class CampusService {
     };
   }
 
-  Future<Json> upcoming({DateTime? now}) async {
+  Future<Json> upcoming({DateTime? now, bool refresh = false}) async {
     final wall = beijing(now ?? DateTime.now()),
         end = beijing(now ?? DateTime.now()).add(const Duration(hours: 48));
     final all = <Json>[];
     Json? firstDateInfo;
+    final calendars = <String, Json>{};
+    final timetables = <String, List<TimetableEntry>>{};
+    final examsBySemester = <String, List<Json>>{};
+    final assignmentsBySemester = <String, List<Json>>{};
     for (var i = 0; i < 3; i++) {
-      final d = await daily(day(wall).add(Duration(days: i)));
-      firstDateInfo ??= object(d['dateInfo'] ?? {});
-      all.addAll(rows(d['events']));
+      final current = day(wall).add(Duration(days: i)),
+          semester = academicSemester(current),
+          config = calendars[semester] ??= await calendar(
+            semester,
+            refresh: refresh,
+          ),
+          table = timetables[semester] ??= await timetable(
+            semester,
+            refresh: refresh,
+          ),
+          tests = examsBySemester[semester] ??= await exams(
+            semester,
+            refresh: refresh,
+          ),
+          work = assignmentsBySemester[semester] ??= await assignments(
+            semesterId: semester,
+            refresh: refresh,
+          );
+      final info = dateInfo(current, config);
+      firstDateInfo ??= info;
+      all.addAll(dailyEvents(current, config, table, tests, work));
     }
     final events = all.where((e) {
       final start = DateTime.parse('${e['date']}T${e['startTime']}:00Z'),

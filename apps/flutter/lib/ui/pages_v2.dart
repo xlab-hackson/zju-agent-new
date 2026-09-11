@@ -29,6 +29,13 @@ Future<void> openExternal(String url) async {
   }
 }
 
+String? dataUpdatedLabel(String? raw) {
+  final time = raw == null ? null : DateTime.tryParse(raw)?.toUtc();
+  if (time == null) return null;
+  final minutes = DateTime.now().toUtc().difference(time).inMinutes;
+  return '数据更新于 ${minutes < 0 ? 0 : minutes} 分钟前';
+}
+
 class FeaturePage extends StatefulWidget {
   const FeaturePage({super.key, required this.services, required this.page});
   final AppServices services;
@@ -92,33 +99,52 @@ class _FeaturePageState extends State<FeaturePage> {
       case '/courses':
         final semesters = await s.campus.semesters(refresh: refresh);
         final all = semester == 'all';
+        final courses = await s.campus.courses(
+          semesterId: all ? null : semester,
+          refresh: refresh,
+        );
+        final timetable = all
+            ? <Json>[]
+            : (await s.campus.timetable(
+                semester,
+                refresh: refresh,
+              )).map((e) => e.toJson()).toList();
         return {
           'semesters': semesters,
-          'courses': await s.campus.courses(
-            semesterId: all ? null : semester,
-            refresh: refresh,
+          'courses': courses,
+          'timetable': timetable,
+          '_updatedAt': await _updatedAt(
+            cacheKeys: [
+              'semesters',
+              'courses',
+              if (!all) 'timetable:$semester',
+            ],
           ),
-          'timetable': all
-              ? <Json>[]
-              : (await s.campus.timetable(
-                  semester,
-                  refresh: refresh,
-                )).map((e) => e.toJson()).toList(),
         };
       case '/assignments':
+        final items = await s.campus.assignments(
+          semesterId: semester,
+          refresh: refresh,
+        );
         return {
-          'items': await s.campus.assignments(
-            semesterId: semester,
-            refresh: refresh,
+          'items': items,
+          '_updatedAt': await _updatedAt(
+            cacheKeys: ['courses'],
+            cachePrefixes: ['assignments:'],
           ),
         };
       case '/exams':
+        final items = await s.campus.exams(semester, refresh: refresh);
+        final semesters = await s.campus.semesters(refresh: refresh);
         return {
-          'items': await s.campus.exams(semester, refresh: refresh),
-          'semesters': await s.campus.semesters(refresh: refresh),
+          'items': items,
+          'semesters': semesters,
+          '_updatedAt': await _updatedAt(
+            cacheKeys: ['exams:$semester', 'semesters'],
+          ),
         };
       case '/school-info':
-        return s.campus.notices();
+        return s.campus.notices(refresh: refresh);
       case '/downloads':
         var downloadCourses = <Json>[];
         try {
@@ -148,17 +174,25 @@ class _FeaturePageState extends State<FeaturePage> {
               : 'missing',
           'hasModel': rows(providers?['items'] ?? []).isNotEmpty,
         };
-        for (final entry in <String, Future<Object?> Function()>{
-          'schedule': () => s.campus.upcoming(),
-          'timetable': () async => (await s.campus.timetable(
+        var forceRefresh = refresh;
+        for (final entry in <String, Future<Object?> Function(bool)>{
+          'schedule': (force) => s.campus.upcoming(refresh: force),
+          'timetable': (force) async => (await s.campus.timetable(
             semester,
+            refresh: force,
           )).map((entry) => entry.toJson()).toList(),
-          'assignments': () => s.campus.assignments(semesterId: semester),
-          'courses': () => s.campus.courses(semesterId: semester),
-          'exams': () => s.campus.exams(semester),
+          'assignments': (force) =>
+              s.campus.assignments(semesterId: semester, refresh: force),
+          'courses': (force) =>
+              s.campus.courses(semesterId: semester, refresh: force),
+          'exams': (force) => s.campus.exams(semester, refresh: force),
         }.entries) {
           try {
-            result[entry.key] = await entry.value();
+            result[entry.key] = await entry.value(forceRefresh);
+            // upcoming() already refreshes the current semester's timetable,
+            // exams, assignments and courses. Avoid downloading the same
+            // datasets again for the dashboard KPI cards.
+            forceRefresh = false;
           } on AppError catch (e) {
             result['${entry.key}Error'] = e.message;
           }
@@ -166,8 +200,26 @@ class _FeaturePageState extends State<FeaturePage> {
         result['campusStatus'] = hasCampusCredential
             ? s.campus.session.authStatus
             : 'missing';
+        result['_updatedAt'] = await _updatedAt(
+          cacheKeys: ['courses', 'timetable:$semester', 'exams:$semester'],
+          cachePrefixes: ['assignments:'],
+          calendarKeys: [semester],
+        );
         return result;
     }
+  }
+
+  Future<String?> _updatedAt({
+    Iterable<String> cacheKeys = const [],
+    Iterable<String> cachePrefixes = const [],
+    Iterable<String> calendarKeys = const [],
+  }) async {
+    final time = await s.campus.oldestUpdatedAt(
+      cacheKeys: cacheKeys,
+      cachePrefixes: cachePrefixes,
+      calendarKeys: calendarKeys,
+    );
+    return time?.toIso8601String();
   }
 
   Future<void> act(Future<void> Function() fn) async {
@@ -344,6 +396,9 @@ class _FeaturePageState extends State<FeaturePage> {
       PageHead(
         title: title,
         subtitle: subtitle,
+        updatedAt: snapshot.hasData
+            ? dataUpdatedLabel(text(snapshot.data!, '_updatedAt'))
+            : null,
         trailing: IconButton(
           onPressed: refresh,
           tooltip: widget.page == '/school-info' ? '刷新通知' : '刷新',
@@ -963,7 +1018,13 @@ class _FeaturePageState extends State<FeaturePage> {
     final avatarDataUrl = text(settings, 'avatarDataUrl');
     final campusStatus = text(d, 'campusStatus', 'missing');
     return [
-      _dashboardHeader(name, dateInfo, campusStatus, avatarDataUrl),
+      _dashboardHeader(
+        name,
+        dateInfo,
+        campusStatus,
+        avatarDataUrl,
+        dataUpdatedLabel(text(d, '_updatedAt')),
+      ),
       ChapterHead(
         juan: '卷一',
         title: '接下来',
@@ -1007,6 +1068,7 @@ class _FeaturePageState extends State<FeaturePage> {
     Json info,
     String campusStatus,
     String avatarDataUrl,
+    String? updatedLabel,
   ) => Padding(
     padding: const EdgeInsets.only(bottom: 30),
     child: Column(
@@ -1090,6 +1152,16 @@ class _FeaturePageState extends State<FeaturePage> {
                       ),
                     ],
                   ),
+                  if (updatedLabel != null) ...[
+                    const SizedBox(height: 7),
+                    Text(
+                      updatedLabel,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: ink.withValues(alpha: .58),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -1952,7 +2024,10 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
   @override
   void initState() {
     super.initState();
-    materials = widget.services.campus.materials(text(widget.course, 'id'));
+    materials = widget.services.campus.materials(
+      text(widget.course, 'id'),
+      refresh: true,
+    );
   }
 
   @override
@@ -3012,10 +3087,11 @@ class PageHead extends StatelessWidget {
     super.key,
     required this.title,
     this.subtitle,
+    this.updatedAt,
     this.trailing,
   });
   final String title;
-  final String? subtitle;
+  final String? subtitle, updatedAt;
   final Widget? trailing;
   @override
   Widget build(BuildContext context) {
@@ -3036,6 +3112,14 @@ class PageHead extends StatelessWidget {
             child: Text(
               subtitle!,
               style: const TextStyle(fontSize: 12, color: ink),
+            ),
+          ),
+        if (updatedAt != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 5),
+            child: Text(
+              updatedAt!,
+              style: TextStyle(fontSize: 11, color: ink.withValues(alpha: .58)),
             ),
           ),
       ],

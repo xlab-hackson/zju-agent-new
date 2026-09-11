@@ -68,7 +68,7 @@ Windows 旧开发链路也可以使用根目录 `start-dev.bat` / `stop-dev.bat`
 zju-agent-new/
 ├── AGENTS.md
 ├── CLAUDE.md
-├── README.md                         # 仍偏向旧 Web 架构，不能代替本文档的当前状态
+├── README.md                         # Flutter 当前实现简介、运行和安全说明
 ├── ZJU_CAMPUS_AGENT_PROJECT.md
 ├── apps/
 │   ├── flutter/                      # 当前 Flutter 客户端
@@ -100,7 +100,7 @@ zju-agent-new/
 - `CampusShell` 以宽度 >= 1024 作为桌面布局：左侧导航栏宽 240；窄屏使用 AppBar、右上角下载/设置入口和底部导航。
 - 桌面主窗口默认 1320×900，最小 800×600。
 - 右侧辅助面板在宽屏显示；窄屏通过页面上的入口/FAB 调出底部面板。课程页保留这一行为；作业筛选已并入主内容，考试页不再保留冗余右栏。
-- 页面首次进入时由 `AppServices.claimInitialRefresh(pageKey)` 控制本次应用运行内的一次自动刷新，避免手机端每次下拉通知栏或生命周期变化都重新请求。之后由用户主动刷新；学校信息页不使用下拉刷新。
+- 页面首次进入时由 `AppServices.claimInitialRefresh(pageKey)` 控制本次应用运行内的一次**强制刷新**，避免手机端每次下拉通知栏或生命周期变化都重新请求。之后由用户主动刷新，手动刷新同样强制绕过缓存；学校信息页不使用下拉刷新。除本地下载页和占位页外，数据页使用一天有效的本地缓存，并在标题区域显示“数据更新于 N 分钟前”。
 - 功能页标题默认只保留主标题；只有学校信息页保留解释性副标题。不要为了补充说明在标题旁重新添加小字。
 
 ### 4.3 工作台和卡片
@@ -113,8 +113,8 @@ zju-agent-new/
 
 ### 4.4 课程表、考试和通知
 
-- Flutter 课表使用 `ui/pages_v2.dart` 中的 `TimetableView`：7 个日期列在可用宽度内自适应，课程内容区域可滚动；不要改成依赖绝对坐标和手算高度的布局。
-- 节次时间的当前来源是 `apps/flutter/lib/domain/schedule.dart` 的 `sessionTimes`（含 1–16 节）。旧 Web 仍使用 `packages/core/src/domain/schedule.ts`，两者不要混写。
+- Flutter 课表使用 `ui/pages_v2.dart` 中的 `TimetableView`：7 个日期列在可用宽度内自适应，课程内容区域可滚动；当前纵向仍是 `Stack`/`Positioned` 加固定 52px 节次高度，且可视网格只绘制 1–13 节，因此“纵向内容自适应”仍是后续改造项。不要把这一现状误写成已经完全自适应，也不要在修复时继续扩大固定高度掩盖溢出。
+- 课程产品的节次范围是 1–13 节，课表视觉网格当前也只画 1–13 节。`apps/flutter/lib/domain/schedule.dart` 的 `sessionTimes` 中第 14、15 项属于遗留的晚间时间数据，不得当作有效课程节次；后续应清理或明确隔离。旧 Web 仍使用 `packages/core/src/domain/schedule.ts`，两者不要混写。
 - 课表、考试、成绩数据来自教务网；学在浙大主要提供课程、课件、作业和测验。
 - 学校信息页直接读取素质拓展平台和教务网公开通知接口。`stripHtmlText` 必须在展示摘要前去掉 HTML 标签，并保留合理换行；教务发布人字段是 `xwfbr`。
 
@@ -124,8 +124,8 @@ zju-agent-new/
 
 - `lib/application/services.dart` 的 `AppServices` 持有数据库、系统安全存储、校园服务、文件服务、备份服务和 Agent 服务。
 - 数据库是 Drift + `NativeDatabase.createInBackground` 的 SQLite；数据库位于 `getApplicationSupportDirectory()` 下的 `agent.db`。测试使用 `AgentDatabase.memory()`。
-- 缓存数据默认 5 分钟有效；网络失败时可以使用过期缓存并标记 `stale`，认证错误不可静默伪装成正常数据。
-- 退出登录应取消 Agent/下载相关活动、重置校园 session、清除内存 secret、缓存和待确认操作，并清空本次运行的首次刷新标记。
+- 缓存数据默认一天有效；页面本次运行第一次进入和用户手动刷新都会强制绕过缓存重新请求。网络失败时可以使用过期缓存并标记 `stale`，认证错误不可静默伪装成正常数据。
+- 退出登录的目标行为是取消 Agent/下载相关活动、重置校园 session、清除内存 secret、缓存和待确认操作，并清空本次运行的首次刷新标记。当前 `AppServices.logout()` 已取消 Agent，但尚未调用 `FileService` 的下载取消入口；在补齐前不要宣称退出登录能中止所有进行中的下载。
 
 ### 5.2 浙大认证
 
@@ -133,7 +133,7 @@ zju-agent-new/
 - CAS、课程和教务网分别持有内存 cookie jar，共用一次 ZJUAM 登录；请求遇到 401/403/901、登录 HTML 或重定向时识别为会话失效，并按服务重试一次。
 - 手工重定向处理是有意设计：必须在跳转前保存 cookie；不要把认证跳转 URL、ticket、密码或 cookie 打进日志。
 - 服务只接受 HTTPS 的 `zju.edu.cn` 子域名作为校园认证/数据跳转目标；模型服务另受 `ModelClient` 的 HTTPS/本地 HTTP 校验约束。
-- 首页连接状态来自缓存的 `CampusSession` 状态，不应每次进入首页都无条件发起请求；状态探测需要有明确的刷新/失效策略。
+- 首页校园连接状态来自凭据存在性和 `CampusSession.authStatus`，不应每次进入首页都无条件做专门的状态探测；但工作台首次加载仍会调用课程/课表/作业/考试/48 小时日程加载器，是否真正联网由各数据缓存决定。首页“大模型 API 接口”卡片目前只表示存在模型来源配置，不等于已经通过实时可用性检测。
 
 ## 6. Flutter 文件下载与备份
 
@@ -152,7 +152,7 @@ zju-agent-new/
 - 普通聊天会话、消息和待确认操作落入本地数据库；挂件/小窗使用一次性只读模式，不持久化会话，不允许下载工具。
 - 最多进行 8 轮模型/工具迭代。高风险操作需持久化确认，确认有效期 5 分钟。
 - `ui/chat.dart` 的对话窗支持拖动标题栏、拖动边框/角改变大小、最小化和展开；发送键盘行为为 Enter 发送，Ctrl/Meta+Enter 换行。空白输入和空响应不能生成空消息卡片。
-- 聊天窗必须是独立 overlay，不能用遮罩阻塞主界面；在手机端应退化为全宽或底部面板，不能依赖桌面拖拽尺寸。
+- 聊天窗必须是独立 overlay，不能用遮罩阻塞主界面；当前手机端是把同一个 overlay 的宽高限制在 SafeArea 可用空间内，并保留拖动/边框调整逻辑，还不是单独实现的底部面板。后续移动端验收要重点确认触控调整尺寸不会妨碍输入和主界面操作。
 
 ### 7.2 提示词资产
 
@@ -201,7 +201,7 @@ zju-agent-new/
 
 ### Flutter
 
-当前测试覆盖依赖兼容性、领域模型/课表、LLM URL 和请求、登录 cookie、认证协议、错误展示、SQLite/存储；原生测试覆盖 Windows 安全存储和 SQLite，另有真实登录手工测试。
+当前测试覆盖依赖兼容性、领域模型/课表、LLM URL 和请求、登录 cookie、认证协议、错误展示、SQLite/存储；原生测试覆盖 Windows 安全存储和 SQLite，另有真实登录手工测试。2026-09-11 扫描时 `flutter test` 为 39 项全通过；`flutter analyze` 无 error，但有 18 条 info 级风格/弃用提示。
 
 每次修改 Flutter 业务代码，优先执行：
 
@@ -228,6 +228,17 @@ pnpm test
 ## 12. 当前项目状态与下一步判断
 
 - Flutter 客户端已经覆盖认证、课程/课表、作业、考试、通知、下载、本地 Agent、模型设置、个性化和桌面挂件的主要路径；当前重点是迁移后的界面/交互与旧 Web 版本对齐，以及 Windows/手机响应式验收。
-- `ClassroomService` 和 `NetworkService` 仍是预留 stub（智云课堂/校网充值），未经用户重新确认不要实现。
+- Flutter 的 `/classroom` 当前只是占位页，百宝箱中的智云课堂、校网、图书馆等是外部链接；Flutter 代码中没有可用的 `ClassroomService`/`NetworkService`。旧 Node 包中的同名 stub 只属于历史实现，未经用户重新确认不要实现真实服务。
 - 作业提交等超出当前已实现范围的功能，需要先确认服务端接口和产品范围，不要仅凭旧 Web 页面推断已支持。
 - 任何“与 Web 完全一致”的需求都应先区分：用户是在比较旧 Web 视觉/交互，还是要求修改旧 Web 本身。默认只在 Flutter 实现对齐，保留用户明确要求保留的窄屏右上角设置/下载入口和辅助面板行为。
+
+### 12.1 2026-09-11 全量扫描补充
+
+以下扫描结论已纳入当前实现边界和后续验收清单；真实登录链路已由用户实测，本节不重复列为待验证项：
+
+- 错误态：工作台和课程资料弹层仍有直接展示 `snapshot.error` 的路径；课程资料的 `FutureBuilder` 先判断 `!hasData`，请求失败时可能持续显示 loading。应改为脱敏、阶段化的错误状态。
+- 刷新策略：页面首次进入由 `claimInitialRefresh(pageKey)` 控制一次强制刷新，手动刷新也强制绕过缓存；通知和校历已接入一天缓存。学校信息页不使用下拉刷新，但保留标题栏刷新按钮，并显示通知数据的更新时间。
+- 退出登录：当前会取消 Agent 请求并重置校园会话，但没有统一取消 `FileService` 的活动下载；不能把退出登录描述成已中止所有后台文件传输。
+- 提示词资产：`apps/flutter/assets/prompts.json` 已存在并声明在 `pubspec.yaml`，包含 `SYSTEM_PROMPT_TPL`、`GUIDE_RULES`、`BRIEF_RULES`，普通测试已覆盖。若运行时仍提示加载失败，应优先检查构建产物中的资源打包路径和缓存，不要用空字符串 fallback 掩盖问题。
+- 响应式回归：当前自动测试没有覆盖工作台、课表、设置和聊天窗在多个窗口宽度下的 widget/golden 或 RenderFlex overflow；这些仍需按宽屏、800px 窄桌面和手机宽度重复验收。
+- Android 发布：校历公开接口是唯一显式允许的 `http://calendar.celechron.top` 明文例外，并有内置回退；Android release 当前仍使用 debug signing config，正式发布前必须补正式签名。

@@ -21,14 +21,14 @@ Windows 发布时需要携带整个 `build/windows/x64/runner/Release` 目录，
 
 ## 依赖维护
 
-2026-09-11 升级：`go_router` 18.0.1、`file_picker` 12.2.0、`flutter_secure_storage` 11.1.0、`drift` 2.35.0，以及可兼容的间接依赖。Markdown 切换到维护中的 `flutter_markdown_plus` 1.0.12，移除未使用的 `cookie_jar`。
+2026-09-11 升级：`go_router` 18.0.1、`file_picker` 12.2.0、`flutter_secure_storage` 11.1.0，以及可兼容的间接依赖；`drift` 的 `pubspec.yaml` 约束仍为 `^2.30.0`，当前锁文件解析为 2.35.0。Markdown 切换到维护中的 `flutter_markdown_plus` 1.0.12，移除未使用的 `cookie_jar`。
 
 - 文件选择使用 `pickFile()` / `readAsBytes()`；`saveFile()` 在各平台自行保存并返回 URI，应用不再重复写文件。参见 [file_picker 12 变更](https://pub.dev/packages/file_picker/changelog)。
 - 安全存储升级不使用 v10 已废弃的加密配置。Android 最低 API 24，由当前 Flutter 的 `minSdkVersion` 提供；Windows 使用 DPAPI。参见 [安全存储变更](https://pub.dev/packages/flutter_secure_storage/changelog)。
 - `archive` 3.6.1、`xml` 6.6.1 暂保留：Excel 4.0.6 对它们分别约束为 `^3.6.1` 和 `<7.0.0`。升级需另行迁移 Excel 库，不能通过 `dependency_overrides` 强行跨版本。
 - `material_color_utilities` 0.13.0 与 `test_api` 0.7.12 由当前 Flutter SDK 固定，随 SDK 更新处理。`flutter pub outdated` 仍显示这四项属于预期。
 
-依赖兼容测试在 `test/dependency_compatibility_test.dart`，覆盖 Markdown 表格及链接导航、保存取消与 Android content URI；原生安全存储和 SQLite 测试见 `integration_test/native_storage_test.dart`。
+依赖兼容测试在 `test/dependency_compatibility_test.dart`，覆盖 Markdown 表格及链接导航、保存取消与 Android content URI；原生安全存储和 SQLite 测试见 `integration_test/native_storage_test.dart`。2026-09-11 扫描时 `flutter test` 为 39 项全通过，`flutter analyze` 无 error 但有 18 条 info 级风格/弃用提示。
 
 ## 登录验证
 
@@ -47,5 +47,13 @@ flutter test integration_test/native_login_test.dart -d windows --dart-define=VE
 ```
 
 该检查只报告阶段及安全错误信息，不修改已保存的账号或业务数据。它不属于普通自动回归，避免反复向学校提交登录请求。协议 Mock 测试不能替代真实登录验收。
+
+## 当前实现边界
+
+- 课程表实际只有 1–13 节；目前横向自适应，但视觉网格纵向仍使用固定 52px 节次高度。代码中的额外晚间时间项属于待清理的遗留数据，不代表产品存在第 14、15 节。
+- 每个数据页本次运行首次进入时强制绕过缓存请求；之后点击刷新或下拉刷新也强制请求。通知和校历使用一天缓存，数据页标题显示“数据更新于 N 分钟前”。
+- 退出登录当前会取消 Agent 请求，但还没有统一取消 `FileService` 的活动下载。
+- 工作台和课程资料弹层仍需修复错误态展示：部分路径直接展示 `snapshot.error`，课程资料请求出错时可能停留在 loading 状态。工作台、课表、设置和聊天窗也尚无完整的多宽度 widget overflow 自动回归。
+- Android 的校历公开地址是 `http://calendar.celechron.top`，已在网络安全配置中作为唯一远程明文例外，并有内置校历回退；Android release 尚未配置正式签名。
 
 2026-09-10：修复 Cookie `Expires` 的严格日期解析引发 `HttpException`、导致设置页仅显示通用失败提示的问题。新增兼容 Cookie 日期解析、登录响应回归，以及区分凭据读取、保存、会话清理和认证阶段的错误提示。Windows 原生安全存储和后台 SQLite 验证通过；用户已确认应用登录流程通过，后续重点转为各页面与旧 Web 版的功能验收。

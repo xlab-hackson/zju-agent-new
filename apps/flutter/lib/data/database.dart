@@ -29,10 +29,33 @@ class AgentDatabase extends GeneratedDatabase {
     return row == null ? null : object(jsonDecode(row.read<String>('value')));
   }
 
+  Future<DateTime?> updatedAt(String collection, String id) async {
+    final row = await customSelect(
+      'SELECT updated_at FROM records WHERE collection = ? AND id = ?',
+      variables: [Variable(collection), Variable(id)],
+    ).getSingleOrNull();
+    return row == null
+        ? null
+        : DateTime.tryParse(row.read<String>('updated_at'))?.toUtc();
+  }
+
   Future<List<Json>> list(String collection) async => (await customSelect(
     'SELECT value FROM records WHERE collection = ? ORDER BY updated_at DESC',
     variables: [Variable(collection)],
   ).get()).map((r) => object(jsonDecode(r.read<String>('value')))).toList();
+
+  Future<List<String>> ids(String collection, {String? prefix}) async {
+    final result = await customSelect(
+      prefix == null
+          ? 'SELECT id FROM records WHERE collection = ?'
+          : 'SELECT id FROM records WHERE collection = ? AND id LIKE ?',
+      variables: prefix == null
+          ? [Variable(collection)]
+          : [Variable(collection), Variable('$prefix%')],
+    ).get();
+    return result.map((row) => row.read<String>('id')).toList();
+  }
+
   Future<void> put(String collection, String id, Json value) => customStatement(
     'INSERT INTO records(collection,id,value,updated_at) VALUES(?,?,?,?) ON CONFLICT(collection,id) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at',
     [
