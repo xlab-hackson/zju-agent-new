@@ -8,7 +8,7 @@ import 'package:go_router/go_router.dart';
 import 'application/services.dart';
 import 'platform/desktop.dart';
 import 'ui/chat.dart';
-import 'ui/pages_v2.dart';
+import 'ui/pages/feature_page.dart';
 import 'ui/settings.dart';
 import 'ui/theme.dart';
 

@@ -1,4 +1,5 @@
 import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:zju_campus_agent/application/agent.dart';
@@ -10,7 +11,7 @@ import 'package:zju_campus_agent/data/campus_session.dart';
 import 'package:zju_campus_agent/data/credentials.dart';
 import 'package:zju_campus_agent/data/database.dart';
 import 'package:zju_campus_agent/domain/models.dart';
-import 'package:zju_campus_agent/ui/pages_v2.dart';
+import 'package:zju_campus_agent/ui/courses/course_detail_sheet.dart';
 
 class _MemorySecrets implements SecretStore {
   final Map<String, Json> values = {};

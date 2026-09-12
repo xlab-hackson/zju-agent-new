@@ -332,7 +332,12 @@ class CampusService {
       final courseCreditMap = <String, double>{};
       for (final key in j.keys) {
         if (key == 'kbList') continue;
-        for (final c in rows(j[key])) {
+        // Ignore scalar/object metadata when looking for course credits.
+        // Parsing it as rows would abort refresh and retain the old cache.
+        final metadata = j[key];
+        if (metadata is! List) continue;
+        for (final rawCourse in metadata.whereType<Map>()) {
+          final c = object(rawCourse);
           final name = text(
             c,
             'kcmc',
@@ -360,7 +365,7 @@ class CampusService {
         final e = parseTimetable(row, semester, creditMap: courseCreditMap);
         if (e != null) entries.add(e);
       }
-      for (final s in rows(j['sjkList'])) {
+      for (final s in rows(j['sjkList'] ?? const [])) {
         final name = text(s, 'kcmc', text(s, 'KCMC')).trim();
         final xf =
             double.tryParse(text(s, 'xf', text(s, 'XF', text(s, 'credit')))) ??

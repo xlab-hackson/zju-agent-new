@@ -4,15 +4,23 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:zju_campus_agent/application/agent.dart';
 import 'package:zju_campus_agent/application/campus.dart';
+import 'package:zju_campus_agent/application/course_overview.dart';
 import 'package:zju_campus_agent/application/files.dart';
 import 'package:zju_campus_agent/application/knowledge.dart';
 import 'package:zju_campus_agent/application/services.dart';
 import 'package:zju_campus_agent/data/campus_session.dart';
 import 'package:zju_campus_agent/data/credentials.dart';
 import 'package:zju_campus_agent/data/database.dart';
+import 'package:zju_campus_agent/domain/course_catalog.dart';
+import 'package:zju_campus_agent/domain/formatters.dart';
 import 'package:zju_campus_agent/domain/models.dart';
 import 'package:zju_campus_agent/domain/schedule.dart';
-import 'package:zju_campus_agent/ui/pages_v2.dart';
+import 'package:zju_campus_agent/ui/assignments/assignment_card.dart';
+import 'package:zju_campus_agent/ui/courses/course_detail_sheet.dart';
+import 'package:zju_campus_agent/ui/courses/course_right_panel.dart';
+import 'package:zju_campus_agent/ui/courses/timetable_view.dart';
+import 'package:zju_campus_agent/ui/pages/feature_page.dart';
+import 'package:zju_campus_agent/ui/shared/page_header.dart';
 import 'package:zju_campus_agent/ui/theme.dart';
 
 class _FakeSecrets implements SecretStore {

@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:zju_campus_agent/ui/pages_v2.dart';
+import 'package:zju_campus_agent/domain/assignment_rules.dart';
 
 void main() {
   test('isVisibleAssignment logic matches 1-week overdue threshold', () {

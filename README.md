@@ -11,10 +11,10 @@
 - Flutter Windows 客户端已覆盖认证、课程、课表、作业、考试、通知、成绩、资料下载、本地 AI 对话、模型设置、个性化和桌面挂件的主要路径；页面感知上下文也已接入 Agent 和聊天。
 - 当前正在进行迁移后的界面/交互对齐，以及 Windows 和手机端的响应式验收。
 - Windows 已能原生编译；Android 和全量功能验收尚未完成。
-- 智云课堂和校网充值服务仍是预留 stub，作业提交等超出当前范围的功能尚未作为已完成能力提供。
+- 智云课堂目前是占位页，百宝箱提供校园网站的外部链接；校网充值和作业提交尚未作为已完成能力提供。旧 Node 中的服务 stub 不代表 Flutter 已接入对应接口。
 - 应用不提供云端部署，数据默认保存在本机。
 
-2026-09-12 当前边界：部分错误态仍需改为阶段化展示，退出登录尚未统一取消活动下载；提示词资源已通过普通测试，运行时异常应排查资源打包路径；多宽度 widget overflow 回归尚未覆盖，Android release 仍需正式签名。
+2026-09-12 当前边界：部分错误态仍需改为阶段化展示，退出登录尚未统一取消活动下载；提示词资源已通过普通测试，运行时异常应排查资源打包路径。七个功能页已增加 1320/800/390px 的渲染回归，设置、聊天窗和触控交互仍需继续验收；Android release 仍需正式签名。
 
 ## Flutter 客户端
 
@@ -103,6 +103,7 @@ flutter test integration_test/native_login_test.dart -d windows --dart-define=VE
 - 课程、课表、作业、考试、成绩、通知和校历缓存默认有效一天；网络失败时可以展示过期缓存并标记为旧数据，同时保留错误状态。
 - 通知页也使用同一套缓存机制；它不使用下拉刷新，但页面刷新按钮仍然强制刷新两个通知来源。
 - 数据页面显示实际依赖数据中最早一次成功缓存的更新时间，格式为“数据更新于 N 分钟前”；跨页面收到缓存变更后只做本地重组，不把通知转成重复网络请求。下载页是本地文件管理页，不参与这套网络数据缓存和更新时间提示。
+- 刷新结束后更新按钮状态；已打开的课程总览弹层同步接收刷新和缓存变化，更新内容、学期及时间。工作台仍包含刷新失败后回退的数据时，会显示“部分数据未能刷新，当前仍包含上次成功获取的数据。”，并保留真实的旧数据时间。
 - 退出登录时清除首次进入记录和相关缓存，下一次登录后各页面可以重新初始化。
 
 ### 数据加载与页面联动
@@ -110,6 +111,21 @@ flutter test integration_test/native_login_test.dart -d windows --dart-define=VE
 - 工作台通过一次 `upcoming()` 共享当前/相近学期的课程、课表、作业、考试和 48 小时日程数据；学业快览需要全历史统计时才额外读取全量成绩和选课数据。
 - 课程表学期和课程总览辅助栏学期彼此独立，刷新也彼此独立；辅助栏统计和更新时间只依赖它实际展示的缓存资源。
 - 页面上下文由 `apps/flutter/lib/domain/page_context.dart` 统一建模，路由、学期、辅助栏、课程详情和详情 Tab 变化会实时同步给 `AppServices` 和 Agent。
+
+### 页面与业务模块
+
+工作台、课程表、作业、考试、学校信息、下载和课堂占位页已拆成七个独立页面，各自管理筛选条件、加载和页面上下文。原集中页面实现与兼容导出入口均已删除，应用和测试直接引用所属模块。
+
+| 目录或文件（相对 `apps/flutter/lib`） | 职责 |
+| --- | --- |
+| `ui/pages/` | 独立页面；`feature_page.dart` 只负责路由适配 |
+| `ui/shared/` | 通用布局、加载、刷新、缓存订阅和文件动作 |
+| `ui/courses/`、`ui/assignments/`、`ui/exams/`、`ui/downloads/`、`ui/dashboard/` | 各功能组件和交互状态 |
+| `application/page_loaders/` | 页面数据组合、缓存依赖和更新时间聚合 |
+| `application/course_overview.dart`、`application/course_details.dart` | 课程总览聚合、课程匹配和元信息补全 |
+| `domain/` | 课程规范化、成绩计算、作业规则、小学期筛选等纯业务逻辑 |
+
+新增页面沿用这些边界，业务模块不依赖 UI。具体页面入口见 [Flutter 页面模块导航](apps/flutter/lib/ui/pages/README.md)。
 
 ## 数据与安全
 
@@ -142,7 +158,7 @@ lib/
 
 `archive` 3.6.1 和 `xml` 6.6.1 暂时保留，因为 `excel 4.0.6` 对它们有版本约束；`material_color_utilities` 和 `test_api` 的旧版本由当前 Flutter SDK 固定。不要用 `dependency_overrides` 强行跨越这些约束。Android release 当前仍使用 debug signing config，正式发布前需要补正式签名。
 
-当前工作区验证结果：`flutter test` 100 项全通过，`flutter analyze` 输出 `No issues found!`。更多 Flutter 依赖、平台差异和登录协议说明见 [`apps/flutter/README.md`](apps/flutter/README.md)。
+最近验证记录（2026-09-12）：页面拆分和旧入口删除后，`flutter test --no-pub` 105 项全通过，`flutter analyze --no-pub` 输出 `No issues found!`。之后的课表解析、刷新结束状态、辅助弹层同步和旧数据提示修复按用户要求未再运行测试或分析；上述结果不代表这些后续修复已验证。更多细节见 [`apps/flutter/README.md`](apps/flutter/README.md)。
 
 ## 旧 Web/Electron/Node 实现
 
@@ -210,5 +226,6 @@ pnpm test
 
 - [`AGENTS.md`](AGENTS.md)：当前项目导航、架构差异和编码约定。
 - [`apps/flutter/README.md`](apps/flutter/README.md)：Flutter 依赖、平台构建和登录验证细节。
+- [Flutter 页面模块导航](apps/flutter/lib/ui/pages/README.md)：独立页面入口、公共组件和业务分层。
 - [`ZJU_CAMPUS_AGENT_PROJECT.md`](ZJU_CAMPUS_AGENT_PROJECT.md)：产品规格和阶段规划。
 - [`docs/`](docs/)：设计对比、代码审查和其他开发记录。

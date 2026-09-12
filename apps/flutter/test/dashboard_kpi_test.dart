@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:zju_campus_agent/application/agent.dart';
@@ -10,8 +11,12 @@ import 'package:zju_campus_agent/application/services.dart';
 import 'package:zju_campus_agent/data/campus_session.dart';
 import 'package:zju_campus_agent/data/credentials.dart';
 import 'package:zju_campus_agent/data/database.dart';
+import 'package:zju_campus_agent/domain/course_catalog.dart';
+import 'package:zju_campus_agent/domain/formatters.dart';
+import 'package:zju_campus_agent/domain/grade_stats.dart';
 import 'package:zju_campus_agent/domain/models.dart';
-import 'package:zju_campus_agent/ui/pages_v2.dart';
+import 'package:zju_campus_agent/ui/dashboard/multi_metric_kpi.dart';
+import 'package:zju_campus_agent/ui/pages/feature_page.dart';
 import 'package:zju_campus_agent/ui/theme.dart';
 
 class _FakeSecrets implements SecretStore {
