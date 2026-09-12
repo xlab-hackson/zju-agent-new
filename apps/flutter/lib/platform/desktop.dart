@@ -61,6 +61,11 @@ class DesktopHost with TrayListener, WindowListener {
       'tray.ico',
     );
     await trayManager.setIcon(icon);
+    // tray_manager 0.5.3 的 Windows 实现在首次 NIM_ADD 时会把尚未初始化的
+    // nid.szTip（垃圾内存）备份后原样写回，并因此设置 NIF_TIP，导致鼠标悬停
+    // 托盘图标时显示乱码。这里显式设置 tooltip 覆盖掉那个值。
+    // 必须在 setIcon 之后调用：SetToolTip 走 NIM_MODIFY，要求图标已经存在。
+    await trayManager.setToolTip('求是书院');
     await trayManager.setContextMenu(
       Menu(
         items: [
@@ -193,10 +198,14 @@ class _WidgetAppState extends State<WidgetApp> {
   }
 
   Future<void> ask() async {
-    if (asking || input.text.trim().isEmpty) return;
+    final question = input.text.trim();
+    if (asking || question.isEmpty) return;
+    // 发送后立即清空输入框：主聊天窗（ui/chat.dart 的 send）同样如此，
+    // 挂件这里此前漏掉了，导致消息发出后文字仍停留在输入框里。
+    input.clear();
     setState(() => asking = true);
     try {
-      final value = await host.invokeMethod<String>('ask', input.text.trim());
+      final value = await host.invokeMethod<String>('ask', question);
       if (mounted) setState(() => answer = value ?? '');
     } catch (_) {
       if (mounted) setState(() => answer = '问答未完成，请重试。');
