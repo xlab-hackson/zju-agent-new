@@ -60,15 +60,17 @@ class Paper extends StatelessWidget {
     super.key,
     required this.child,
     this.padding = const EdgeInsets.all(20),
+    this.color,
   });
   final Widget child;
   final EdgeInsetsGeometry padding;
+  final Color? color;
   @override
   Widget build(BuildContext context) => Container(
     margin: const EdgeInsets.only(bottom: 16),
     padding: padding,
     decoration: BoxDecoration(
-      color: paperCard,
+      color: color ?? paperCard,
       border: Border.all(color: ink.withValues(alpha: .14)),
       borderRadius: BorderRadius.circular(3),
       boxShadow: const [

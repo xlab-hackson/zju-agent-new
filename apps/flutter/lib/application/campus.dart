@@ -202,10 +202,9 @@ class CampusService {
       semesterId: semesterId,
       refresh: refresh,
     )).where((c) => courseId == null || c['id'] == courseId);
-    final result = <Json>[];
-    for (final c in selected) {
-      result.addAll(
-        await cached('assignments:${c['id']}', () async {
+    final tasks = selected.map((c) async {
+      try {
+        return await cached('assignments:${c['id']}', () async {
           final j = await session.json(
             'courses',
             '$coursesBase/api/courses/${Uri.encodeComponent('${c['id']}')}/homework-activities?page=1&page_size=1000',
@@ -227,8 +226,15 @@ class CampusService {
                 },
               )
               .toList();
-        }, refresh: refresh),
-      );
+        }, refresh: refresh);
+      } catch (_) {
+        return <Json>[];
+      }
+    });
+    final lists = await Future.wait(tasks);
+    final result = <Json>[];
+    for (final list in lists) {
+      result.addAll(list);
     }
     return result;
   }

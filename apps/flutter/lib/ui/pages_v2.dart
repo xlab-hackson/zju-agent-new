@@ -47,15 +47,20 @@ class FeaturePage extends StatefulWidget {
 
 class _FeaturePageState extends State<FeaturePage> {
   late Future<Json> data;
+  Future<Json>? overviewData;
   String semester = academicSemester(beijing(DateTime.now()));
-  String assignmentTab = 'urgent';
+  String overviewSemester = 'all';
+  String assignmentTab = 'all';
   String noticeSource = 'all';
   String upcomingTab = 'schedule';
   int urgentHours = 24;
   DateTime now = DateTime.now();
   Timer? ticker;
   bool _refreshing = false;
+  bool _refreshingTimetable = false;
+  bool _refreshingOverview = false;
   final exportKey = GlobalKey();
+  bool _exporting = false;
 
   AppServices get s => widget.services;
 
@@ -65,6 +70,11 @@ class _FeaturePageState extends State<FeaturePage> {
   void initState() {
     super.initState();
     data = load(refresh: s.claimInitialRefresh(widget.page));
+    if (widget.page == '/courses') {
+      overviewData = loadOverview(
+        refresh: s.claimInitialRefresh('/courses:panel'),
+      );
+    }
     ticker = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() => now = DateTime.now());
     });
@@ -77,6 +87,10 @@ class _FeaturePageState extends State<FeaturePage> {
   }
 
   Future<void> refresh() async {
+    if (widget.page == '/courses') {
+      await refreshTimetable();
+      return;
+    }
     if (_refreshing) return;
     _refreshing = true;
     final next = load(refresh: true);
@@ -94,36 +108,90 @@ class _FeaturePageState extends State<FeaturePage> {
     }
   }
 
+  Future<void> refreshTimetable({bool force = true}) async {
+    if (_refreshingTimetable) return;
+    _refreshingTimetable = true;
+    final next = load(refresh: force);
+    if (mounted) {
+      setState(() {
+        data = next;
+      });
+    }
+    try {
+      await next;
+    } catch (_) {
+      // FutureBuilder renders the page error; refresh controls should settle.
+    } finally {
+      _refreshingTimetable = false;
+    }
+  }
+
+  Future<void> _exportTimetablePng() async {
+    if (!mounted) return;
+    setState(() => _exporting = true);
+    await WidgetsBinding.instance.endOfFrame;
+    try {
+      await exportPng(exportKey, semester);
+    } finally {
+      if (mounted) {
+        setState(() => _exporting = false);
+      }
+    }
+  }
+
+  Future<void> refreshOverview() async {
+    if (_refreshingOverview) return;
+    _refreshingOverview = true;
+    final next = loadOverview(refresh: true);
+    if (mounted) {
+      setState(() {
+        overviewData = next;
+      });
+    }
+    try {
+      await next;
+    } catch (_) {
+      // FutureBuilder renders the page error; refresh controls should settle.
+    } finally {
+      _refreshingOverview = false;
+    }
+  }
+
+  Future<Json> loadOverview({bool refresh = false}) async {
+    final semesters = await s.campus.semesters(refresh: refresh);
+    final courses = await s.campus.courses(refresh: refresh);
+    return {
+      'semesters': semesters,
+      'courses': courses,
+      '_updatedAt': await _updatedAt(
+        cacheKeys: [
+          'semesters',
+          'courses',
+        ],
+      ),
+    };
+  }
+
   Future<Json> load({bool refresh = false}) async {
     switch (widget.page) {
       case '/courses':
         final semesters = await s.campus.semesters(refresh: refresh);
-        final all = semester == 'all';
-        final courses = await s.campus.courses(
-          semesterId: all ? null : semester,
+        final timetable = (await s.campus.timetable(
+          semester,
           refresh: refresh,
-        );
-        final timetable = all
-            ? <Json>[]
-            : (await s.campus.timetable(
-                semester,
-                refresh: refresh,
-              )).map((e) => e.toJson()).toList();
+        )).map((e) => e.toJson()).toList();
         return {
           'semesters': semesters,
-          'courses': courses,
           'timetable': timetable,
           '_updatedAt': await _updatedAt(
             cacheKeys: [
               'semesters',
-              'courses',
-              if (!all) 'timetable:$semester',
+              'timetable:$semester',
             ],
           ),
         };
       case '/assignments':
         final items = await s.campus.assignments(
-          semesterId: semester,
           refresh: refresh,
         );
         return {
@@ -182,7 +250,7 @@ class _FeaturePageState extends State<FeaturePage> {
             refresh: force,
           )).map((entry) => entry.toJson()).toList(),
           'assignments': (force) =>
-              s.campus.assignments(semesterId: semester, refresh: force),
+              s.campus.assignments(refresh: force),
           'courses': (force) =>
               s.campus.courses(semesterId: semester, refresh: force),
           'exams': (force) => s.campus.exams(semester, refresh: force),
@@ -287,7 +355,7 @@ class _FeaturePageState extends State<FeaturePage> {
     return RefreshIndicator(
       color: blue,
       backgroundColor: paperCard,
-      onRefresh: refresh,
+      onRefresh: widget.page == '/courses' ? refreshTimetable : refresh,
       child: scroll,
     );
   }
@@ -303,7 +371,7 @@ class _FeaturePageState extends State<FeaturePage> {
       child: RefreshIndicator(
         color: blue,
         backgroundColor: paperCard,
-        onRefresh: refresh,
+        onRefresh: widget.page == '/courses' ? refreshOverview : refresh,
         child: SingleChildScrollView(
           physics: const AlwaysScrollableScrollPhysics(),
           child: _rightPanelContent(),
@@ -314,18 +382,63 @@ class _FeaturePageState extends State<FeaturePage> {
 
   Widget _rightPanelContent({VoidCallback? onPanelChanged}) =>
       FutureBuilder<Json>(
-        future: data,
+        future: widget.page == '/courses'
+            ? (overviewData ??= loadOverview(
+                refresh: s.claimInitialRefresh('/courses:panel'),
+              ))
+            : data,
         builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting &&
+              !snapshot.hasData) {
+            return const Center(
+              child: Padding(
+                padding: EdgeInsets.all(24),
+                child: CircularProgressIndicator(color: blue),
+              ),
+            );
+          }
+          if (snapshot.hasError) {
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.cloud_off, color: seal),
+                    const SizedBox(height: 8),
+                    Text(
+                      snapshot.error is AppError
+                          ? (snapshot.error as AppError).message
+                          : '课程加载失败',
+                      style: const TextStyle(color: ink, fontSize: 12),
+                    ),
+                    const SizedBox(height: 8),
+                    OutlinedButton(
+                      onPressed: () {
+                        refreshOverview();
+                        onPanelChanged?.call();
+                      },
+                      child: const Text('重试', style: TextStyle(fontSize: 12)),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }
           if (!snapshot.hasData) return const SizedBox.shrink();
           final d = snapshot.data!;
           switch (widget.page) {
             case '/courses':
               return CourseRightPanel(
                 data: d,
-                selected: semester,
+                selected: overviewSemester,
+                refreshing: _refreshingOverview,
                 onChanged: (value) {
-                  semester = value;
-                  refresh();
+                  setState(() => overviewSemester = value);
+                  onPanelChanged?.call();
+                },
+                onRefresh: () {
+                  refreshOverview();
                   onPanelChanged?.call();
                 },
                 onSelect: courseDetail,
@@ -356,7 +469,10 @@ class _FeaturePageState extends State<FeaturePage> {
         child: RefreshIndicator(
           color: blue,
           backgroundColor: paperCard,
-          onRefresh: refresh,
+          onRefresh: () async {
+            await refreshOverview();
+            setSheetState(() {});
+          },
           child: SingleChildScrollView(
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
@@ -389,23 +505,44 @@ class _FeaturePageState extends State<FeaturePage> {
     final subtitle = widget.page == '/school-info'
         ? '素质拓展平台与教务系统的最新通知公告，点击条目在浏览器打开原文'
         : null;
-    final choices = widget.page == '/courses' || widget.page == '/exams'
-        ? semesterChoices(rows(snapshot.data?['semesters'] ?? []))
-        : const <SemesterChoice>[];
+    final choices = widget.page == '/courses'
+        ? semesterChoices(
+            rows(snapshot.data?['semesters'] ?? []),
+            includeAll: false,
+          )
+        : widget.page == '/exams'
+            ? semesterChoices(rows(snapshot.data?['semesters'] ?? []))
+            : const <SemesterChoice>[];
+    if (widget.page == '/courses' && choices.isNotEmpty && semester == 'all') {
+      semester = choices.first.id;
+    }
+    final isBusy = widget.page == '/courses' ? _refreshingTimetable : _refreshing;
     final body = <Widget>[
       PageHead(
         title: title,
+        titleSuffix: null,
         subtitle: subtitle,
         updatedAt: snapshot.hasData
             ? dataUpdatedLabel(text(snapshot.data!, '_updatedAt'))
             : null,
-        trailing: IconButton(
-          onPressed: refresh,
-          tooltip: widget.page == '/school-info' ? '刷新通知' : '刷新',
-          icon: const Icon(Icons.refresh, size: 18),
-        ),
+        trailing: widget.page == '/courses'
+            ? null
+            : IconButton(
+                onPressed: isBusy ? null : refresh,
+                tooltip: widget.page == '/school-info' ? '刷新通知' : '刷新',
+                icon: isBusy
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: blue,
+                        ),
+                      )
+                    : const Icon(Icons.refresh, size: 18),
+              ),
       ),
-      if (choices.isNotEmpty && (!wide || widget.page == '/exams'))
+      if (choices.isNotEmpty && widget.page == '/exams')
         _semesterPicker(choices),
       if (widget.page == '/assignments' && snapshot.hasData)
         Paper(
@@ -415,7 +552,7 @@ class _FeaturePageState extends State<FeaturePage> {
             onHoursChanged: (value) => setState(() => urgentHours = value),
           ),
         ),
-      _asyncBody(snapshot, wide: wide),
+      _asyncBody(snapshot, wide: wide, choices: choices),
       if (s.campus.stale.isNotEmpty)
         const Padding(
           padding: EdgeInsets.all(12),
@@ -452,7 +589,11 @@ class _FeaturePageState extends State<FeaturePage> {
     ),
   );
 
-  Widget _asyncBody(AsyncSnapshot<Json> snapshot, {required bool wide}) {
+  Widget _asyncBody(
+    AsyncSnapshot<Json> snapshot, {
+    required bool wide,
+    List<SemesterChoice> choices = const [],
+  }) {
     if (snapshot.connectionState != ConnectionState.done) {
       return const Paper(
         child: Center(
@@ -483,14 +624,22 @@ class _FeaturePageState extends State<FeaturePage> {
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
-      children: content(snapshot.data ?? {}, wide: wide),
+      children: content(
+        snapshot.data ?? {},
+        wide: wide,
+        choices: choices,
+      ),
     );
   }
 
-  List<Widget> content(Json d, {required bool wide}) {
+  List<Widget> content(
+    Json d, {
+    required bool wide,
+    List<SemesterChoice> choices = const [],
+  }) {
     switch (widget.page) {
       case '/courses':
-        return _courses(d, wide: wide);
+        return _courses(d, wide: wide, choices: choices);
       case '/assignments':
         return _assignments(d);
       case '/exams':
@@ -514,85 +663,47 @@ class _FeaturePageState extends State<FeaturePage> {
     }
   }
 
-  List<Widget> _courses(Json d, {required bool wide}) {
+  List<Widget> _courses(
+    Json d, {
+    required bool wide,
+    List<SemesterChoice> choices = const [],
+  }) {
     final entries = rows(d['timetable']).map(TimetableEntry.fromJson).toList();
-    final courses = rows(d['courses']);
-    final result = <Widget>[];
-    if (semester == 'all') {
-      result.add(
-        Paper(
-          child: PageEmpty(
-            icon: 'calendar-days',
-            title: '已切换为「全部学期」总览',
-            description: '右侧总览已展示全部历史课程。课表按单学期排列，请选择具体学期查看课表。',
-          ),
+    return [
+      RepaintBoundary(
+        key: exportKey,
+        child: TimetableView(
+          entries: entries,
+          semester: semester,
+          wide: wide,
+          choices: choices,
+          refreshing: _refreshingTimetable,
+          isExporting: _exporting,
+          onSemesterChanged: (id) {
+            setState(() {
+              semester = id;
+            });
+            refreshTimetable(force: false);
+          },
+          onExportPng: () => act(_exportTimetablePng),
+          onExportXlsx: () => act(() => exportXlsx(entries, semester)),
+          onRefresh: refreshTimetable,
         ),
-      );
-    } else if (entries.isEmpty) {
-      result.add(
-        Paper(
-          child: PageEmpty(icon: 'calendar-grid', title: '该学期暂无课表数据'),
-        ),
-      );
-    } else {
-      result.add(
-        Wrap(
-          alignment: WrapAlignment.end,
-          spacing: 4,
-          runSpacing: 2,
-          children: [
-            TextButton.icon(
-              onPressed: () => act(() => exportPng(exportKey, semester)),
-              icon: const Icon(Icons.image_outlined, size: 16),
-              label: const Text('导出图片'),
-            ),
-            TextButton.icon(
-              onPressed: () => act(() => exportXlsx(entries, semester)),
-              icon: const Icon(Icons.table_chart_outlined, size: 16),
-              label: const Text('导出 Excel'),
-            ),
-            IconButton(
-              onPressed: refresh,
-              tooltip: '刷新课程表',
-              icon: const Icon(Icons.refresh, size: 18),
-            ),
-          ],
-        ),
-      );
-      result.add(
-        RepaintBoundary(
-          key: exportKey,
-          child: TimetableView(entries: entries, semester: semester),
-        ),
-      );
-    }
-    if (!wide) {
-      result.add(const SizedBox(height: 24));
-      result.add(const ChapterHead(title: '课程目录', icon: 'book-open'));
-      if (courses.isEmpty) {
-        result.add(const Text('该学期暂无学在浙大课程。', style: TextStyle(color: ink)));
-      } else {
-        for (final course in courses) result.add(_courseButton(course));
-      }
-    }
-    return result;
+      ),
+    ];
   }
 
-  Widget _courseButton(Json course) => Paper(
-    padding: EdgeInsets.zero,
-    child: ListTile(
-      leading: const Icon(Icons.menu_book, color: blue),
-      title: Text(text(course, 'name')),
-      subtitle: Text(text(course, 'teachingClassName')),
-      trailing: const Icon(Icons.chevron_right),
-      onTap: () => courseDetail(course),
-    ),
-  );
-
   List<Widget> _assignments(Json d) {
-    final all = rows(d['items']);
+    final rawAll = rows(d['items']);
     final nowMs = now.millisecondsSinceEpoch;
     final threshold = nowMs + urgentHours * 3600 * 1000;
+
+    // 未到截止时间的全部显示，截止时间已过，但是未超过一周的也显示，已经截止超过一周的就不显示了
+    final all = rawAll.where((a) => isVisibleAssignment(a, nowMs)).toList();
+
+    // 排序：未提交未到期的排在前面（按截止时间由近及远），未提交且已逾期（7天内）的排其后，已提交的排最后
+    all.sort(compareAssignments);
+
     final overdue = all
         .where(
           (a) =>
@@ -614,21 +725,22 @@ class _FeaturePageState extends State<FeaturePage> {
         .where(
           (a) =>
               !isSubmitted(a) &&
-              deadlineMs(a) != null &&
-              deadlineMs(a)! > threshold,
+              (deadlineMs(a) == null || deadlineMs(a)! > threshold),
         )
         .toList();
     final submitted = all.where(isSubmitted).toList();
     final selected = switch (assignmentTab) {
+      'urgent' => urgent,
       'relaxed' => relaxed,
       'overdue' => overdue,
       'submitted' => submitted,
-      _ => urgent,
+      _ => all,
     };
     final tabs = [
+      ('all', '全部', all.length, blue),
       ('urgent', '将截止', urgent.length, seal),
       ('relaxed', '还不急', relaxed.length, gold),
-      ('overdue', '已截止', overdue.length, ink),
+      ('overdue', '近期截止', overdue.length, ink),
       ('submitted', '已提交', submitted.length, const Color(0xff2e7d32)),
     ];
     return [
@@ -657,8 +769,9 @@ class _FeaturePageState extends State<FeaturePage> {
             title: switch (assignmentTab) {
               'urgent' => '暂无紧急作业',
               'relaxed' => '暂无常规作业',
-              'overdue' => '暂无逾期作业',
-              _ => '暂无已提交作业',
+              'overdue' => '暂无近期截止作业',
+              'submitted' => '暂无已提交作业',
+              _ => '暂无待办作业',
             },
             description: '当前分类下没有相关作业记录。',
           ),
@@ -668,92 +781,12 @@ class _FeaturePageState extends State<FeaturePage> {
     ];
   }
 
-  Widget _assignmentCard(Json a) {
-    final deadline = deadlineMs(a);
-    final overdue = deadline != null && deadline <= now.millisecondsSinceEpoch;
-    final urgent =
-        deadline != null &&
-        !overdue &&
-        deadline - now.millisecondsSinceEpoch <= urgentHours * 3600 * 1000;
-    final status = isSubmitted(a)
-        ? const InkTag(label: '已提交', color: Color(0xff2e7d32))
-        : InkTag(
-            label: overdue
-                ? '已逾期'
-                : urgent
-                ? '即将截止'
-                : '还不急',
-            color: overdue
-                ? seal
-                : urgent
-                ? gold
-                : ink,
-            dot: urgent,
-          );
-    return Paper(
-      padding: const EdgeInsets.all(16),
-      child: InkWell(
-        onTap: () => assignmentDetail(a),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        text(a, 'title'),
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        text(a, 'courseName'),
-                        style: const TextStyle(color: ink, fontSize: 12),
-                      ),
-                    ],
-                  ),
-                ),
-                status,
-              ],
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                const Icon(Icons.hourglass_empty, color: gold, size: 15),
-                const SizedBox(width: 6),
-                Text(
-                  '截止：${formatDateTime(text(a, 'deadline'))}',
-                  style: const TextStyle(fontSize: 12, color: ink),
-                ),
-                if (rows(a['attachments'] ?? []).isNotEmpty) ...[
-                  const SizedBox(width: 12),
-                  InkTag(
-                    label: '附件 ${rows(a['attachments'] ?? []).length}',
-                    color: ink,
-                  ),
-                ],
-              ],
-            ),
-            if (text(a, 'description').isNotEmpty) ...[
-              const Divider(height: 22),
-              Text(
-                html.parse(text(a, 'description')).body?.text ?? '',
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 12, height: 1.6),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
+  Widget _assignmentCard(Json a) => AssignmentCard(
+    assignment: a,
+    now: now,
+    urgentHours: urgentHours,
+    onTap: () => assignmentDetail(a),
+  );
 
   List<Widget> _exams(Json d) {
     final all = rows(d['items']);
@@ -995,8 +1028,11 @@ class _FeaturePageState extends State<FeaturePage> {
     final settings = object(d['settings'] ?? {});
     final schedule = object(d['schedule'] ?? {});
     final events = rows(schedule['events'] ?? []);
-    final allAssignments = rows(d['assignments'] ?? []);
-    final pending = allAssignments
+    final rawAssignments = rows(d['assignments'] ?? []);
+    final activeAssignments = rawAssignments
+        .where((a) => isVisibleAssignment(a, now.millisecondsSinceEpoch))
+        .toList();
+    final pending = activeAssignments
         .where((a) => a['submitted'] != true)
         .toList();
     final assignments48h = pending.where((a) {
@@ -1568,6 +1604,7 @@ class _FeaturePageState extends State<FeaturePage> {
       course: c,
       onDownload: downloadFile,
       onPreview: previewFile,
+      onAssignmentDetail: assignmentDetail,
     ),
   );
 
@@ -1629,11 +1666,15 @@ class CourseRightPanel extends StatelessWidget {
     required this.selected,
     required this.onChanged,
     required this.onSelect,
+    this.onRefresh,
+    this.refreshing = false,
   });
   final Json data;
   final String selected;
   final ValueChanged<String> onChanged;
   final ValueChanged<Json> onSelect;
+  final VoidCallback? onRefresh;
+  final bool refreshing;
 
   @override
   Widget build(BuildContext context) {
@@ -1647,16 +1688,44 @@ class CourseRightPanel extends StatelessWidget {
         semesterNames[rawId] = semesterDisplay(rawId, name);
       }
     }
-    final courses = rows(data['courses']);
-    final entries = rows(
-      data['timetable'],
-    ).map(TimetableEntry.fromJson).toList();
+    final allCourses = rows(data['courses']);
+    final matchingIds = <String>{
+      selected,
+      for (final s in rows(data['semesters'] ?? []))
+        if (text(s, 'id') == selected ||
+            semesterToId(text(s, 'name')) == selected)
+          text(s, 'id'),
+    };
+    final courses = selected == 'all'
+        ? allCourses
+        : allCourses
+            .where((c) => matchingIds.contains(text(c, 'semesterId')))
+            .toList();
     final groups = <String, List<Json>>{};
-    for (final c in courses)
+    for (final c in courses) {
       groups.putIfAbsent(text(c, 'semesterId'), () => []).add(c);
+    }
     return SideSection(
       title: '学期总览',
       icon: 'scroll',
+      trailing: onRefresh != null
+          ? IconButton(
+              onPressed: refreshing ? null : onRefresh,
+              tooltip: '刷新课程',
+              icon: refreshing
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: blue,
+                      ),
+                    )
+                  : const Icon(Icons.refresh, size: 16, color: ink),
+              constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+              padding: EdgeInsets.zero,
+            )
+          : null,
       children: [
         Row(
           children: [
@@ -1668,7 +1737,7 @@ class CourseRightPanel extends StatelessWidget {
             Text(
               selected == 'all'
                   ? '全部课程 ${courses.length} 门'
-                  : '本学期 ${entries.isNotEmpty ? entries.map((e) => e.courseName).toSet().length : courses.length} 门',
+                  : '${semesterNames[selected] ?? selected} ${courses.length} 门',
               style: const TextStyle(fontSize: 11, color: ink),
             ),
           ],
@@ -1769,8 +1838,9 @@ class AssignmentRightPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final all = rows(data['items']);
+    final rawAll = rows(data['items']);
     final now = DateTime.now().millisecondsSinceEpoch;
+    final all = rawAll.where((a) => isVisibleAssignment(a, now)).toList();
     final threshold = now + hours * 3600 * 1000;
     final urgent = all
         .where(
@@ -1785,8 +1855,7 @@ class AssignmentRightPanel extends StatelessWidget {
         .where(
           (a) =>
               a['submitted'] != true &&
-              deadlineMs(a) != null &&
-              deadlineMs(a)! > threshold,
+              (deadlineMs(a) == null || deadlineMs(a)! > threshold),
         )
         .length;
     final overdue = all
@@ -1842,7 +1911,7 @@ class AssignmentRightPanel extends StatelessWidget {
                 icon: Icons.hourglass_empty,
               ),
               SideCount(
-                label: '已截止',
+                label: '近期截止',
                 value: overdue,
                 color: ink,
                 icon: Icons.description_outlined,
@@ -1982,6 +2051,112 @@ class ExamCard extends StatelessWidget {
   }
 }
 
+class AssignmentCard extends StatelessWidget {
+  const AssignmentCard({
+    super.key,
+    required this.assignment,
+    required this.now,
+    this.urgentHours = 48,
+    this.backgroundColor,
+    required this.onTap,
+  });
+
+  final Json assignment;
+  final DateTime now;
+  final int urgentHours;
+  final Color? backgroundColor;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final deadline = deadlineMs(assignment);
+    final overdue = deadline != null && deadline <= now.millisecondsSinceEpoch;
+    final urgent =
+        deadline != null &&
+        !overdue &&
+        deadline - now.millisecondsSinceEpoch <= urgentHours * 3600 * 1000;
+    final status = isSubmitted(assignment)
+        ? const InkTag(label: '已提交', color: Color(0xff2e7d32))
+        : InkTag(
+            label: overdue
+                ? '已逾期'
+                : urgent
+                ? '即将截止'
+                : '还不急',
+            color: overdue
+                ? seal
+                : urgent
+                ? gold
+                : ink,
+            dot: urgent,
+          );
+    return Paper(
+      color: backgroundColor,
+      padding: const EdgeInsets.all(16),
+      child: InkWell(
+        onTap: onTap,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        text(assignment, 'title'),
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        text(assignment, 'courseName'),
+                        style: const TextStyle(color: ink, fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+                status,
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                const Icon(Icons.hourglass_empty, color: gold, size: 15),
+                const SizedBox(width: 6),
+                Text(
+                  '截止：${formatDateTime(text(assignment, 'deadline'))}',
+                  style: const TextStyle(fontSize: 12, color: ink),
+                ),
+                if (rows(assignment['attachments'] ?? []).isNotEmpty) ...[
+                  const SizedBox(width: 12),
+                  InkTag(
+                    label: '附件 ${rows(assignment['attachments'] ?? []).length}',
+                    color: ink,
+                  ),
+                ],
+              ],
+            ),
+            if (text(assignment, 'description').isNotEmpty) ...[
+              const Divider(height: 22),
+              Text(
+                html.parse(text(assignment, 'description')).body?.text ?? '',
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 12, height: 1.6),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class CourseDetailSheet extends StatefulWidget {
   const CourseDetailSheet({
     super.key,
@@ -1989,18 +2164,23 @@ class CourseDetailSheet extends StatefulWidget {
     required this.course,
     required this.onDownload,
     required this.onPreview,
+    this.onAssignmentDetail,
   });
   final AppServices services;
   final Json course;
   final Future<void> Function(Json) onDownload;
   final Future<void> Function(Json) onPreview;
+  final void Function(Json)? onAssignmentDetail;
+
   @override
   State<CourseDetailSheet> createState() => _CourseDetailSheetState();
 }
 
 class _CourseDetailSheetState extends State<CourseDetailSheet> {
   late Future<List<Json>> materials;
+  late Future<List<Json>> assignments;
   final busyFileIds = <String>{};
+  String currentTab = 'materials';
 
   Future<void> runFileAction(
     Json file,
@@ -2024,26 +2204,98 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
   @override
   void initState() {
     super.initState();
-    materials = widget.services.campus.materials(
-      text(widget.course, 'id'),
-      refresh: true,
-    );
+    final courseId = text(widget.course, 'id');
+    materials = widget.services.campus.materials(courseId);
+    assignments = widget.services.campus.assignments(courseId: courseId);
+  }
+
+  Future<void> _refreshMaterials() async {
+    setState(() {
+      materials = widget.services.campus.materials(
+        text(widget.course, 'id'),
+        refresh: true,
+      );
+    });
+  }
+
+  Future<void> _refreshAssignments() async {
+    setState(() {
+      assignments = widget.services.campus.assignments(
+        courseId: text(widget.course, 'id'),
+        refresh: true,
+      );
+    });
+  }
+
+  void _openAssignmentDetail(Json a) {
+    final enriched = {
+      ...a,
+      if (text(a, 'courseName').isEmpty)
+        'courseName': text(widget.course, 'name'),
+      if (text(a, 'courseId').isEmpty)
+        'courseId': text(widget.course, 'id'),
+    };
+    if (widget.onAssignmentDetail != null) {
+      widget.onAssignmentDetail!(enriched);
+    } else {
+      showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        useSafeArea: true,
+        backgroundColor: paperCard,
+        builder: (ctx) => SizedBox(
+          height: MediaQuery.sizeOf(ctx).height * .8,
+          child: ListView(
+            padding: const EdgeInsets.all(24),
+            children: [
+              Text(
+                text(enriched, 'title'),
+                style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                '${text(enriched, 'courseName')} · ${formatDateTime(text(enriched, 'deadline'))}',
+                style: const TextStyle(color: ink),
+              ),
+              const Divider(height: 28),
+              MarkdownBody(
+                data: html.parse(text(enriched, 'description')).body?.text ?? '暂无作业说明',
+                selectable: true,
+              ),
+              const SizedBox(height: 12),
+              for (final f in rows(enriched['attachments'] ?? []))
+                ListTile(
+                  title: Text(text(f, 'name')),
+                  leading: const Icon(Icons.attach_file),
+                  trailing: const Icon(Icons.download),
+                  onTap: () => widget.onDownload({
+                    ...f,
+                    'courseId': enriched['courseId'],
+                    'courseName': enriched['courseName'],
+                  }),
+                ),
+            ],
+          ),
+        ),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) => SizedBox(
     height: MediaQuery.sizeOf(context).height * .9,
     child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 12, 12),
+          padding: const EdgeInsets.fromLTRB(20, 16, 12, 8),
           child: Row(
             children: [
-              const Icon(Icons.folder_copy_outlined, color: gold),
+              const Icon(Icons.school_outlined, color: gold),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  '课程资料 · ${text(widget.course, 'name')}',
+                  text(widget.course, 'name'),
                   style: const TextStyle(
                     fontSize: 17,
                     fontWeight: FontWeight.bold,
@@ -2057,114 +2309,228 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
             ],
           ),
         ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+          child: Row(
+            children: [
+              ChoiceChip(
+                label: const Text('课件资料'),
+                selected: currentTab == 'materials',
+                selectedColor: blue.withValues(alpha: .16),
+                onSelected: (_) {
+                  if (currentTab != 'materials') {
+                    setState(() => currentTab = 'materials');
+                  }
+                },
+              ),
+              const SizedBox(width: 8),
+              ChoiceChip(
+                label: const Text('课程作业'),
+                selected: currentTab == 'assignments',
+                selectedColor: blue.withValues(alpha: .16),
+                onSelected: (_) {
+                  if (currentTab != 'assignments') {
+                    setState(() => currentTab = 'assignments');
+                  }
+                },
+              ),
+            ],
+          ),
+        ),
         const Divider(height: 1),
         Expanded(
-          child: FutureBuilder<List<Json>>(
-            future: materials,
-            builder: (context, snapshot) {
-              if (!snapshot.hasData)
-                return const Center(
-                  child: CircularProgressIndicator(color: blue),
-                );
-              if (snapshot.hasError)
-                return Center(child: Text('${snapshot.error}'));
-              if (snapshot.data!.isEmpty)
-                return const PageEmpty(icon: 'folder', title: '该课程暂无资料');
-              return ListView(
-                padding: const EdgeInsets.all(20),
-                children: [
-                  for (final m in snapshot.data!)
-                    Container(
-                      margin: const EdgeInsets.only(bottom: 14),
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: paper,
-                        border: Border.all(color: ink.withValues(alpha: .15)),
-                        borderRadius: BorderRadius.circular(3),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            text(m, 'title'),
-                            style: const TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          const SizedBox(height: 8),
-                          if (rows(m['files']).isEmpty)
-                            const Text(
-                              '无附件',
-                              style: TextStyle(fontSize: 12, color: ink),
-                            )
-                          else
-                            for (final f in rows(m['files']))
-                              ListTile(
-                                contentPadding: EdgeInsets.zero,
-                                title: Text(
-                                  text(f, 'name'),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                trailing: Wrap(
-                                  spacing: 4,
-                                  children: [
-                                    Builder(
-                                      builder: (context) {
-                                        final fileId = text(
-                                          f,
-                                          'id',
-                                          text(f, 'fileId'),
-                                        );
-                                        final busy = busyFileIds.contains(
-                                          fileId,
-                                        );
-                                        return Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            OutlinedButton(
-                                              onPressed: !busy
-                                                  ? () => runFileAction(
-                                                      f,
-                                                      widget.onPreview,
-                                                    )
-                                                  : null,
-                                              child: const Text('预览'),
-                                            ),
-                                            FilledButton(
-                                              onPressed: !busy
-                                                  ? () => runFileAction(
-                                                      f,
-                                                      widget.onDownload,
-                                                    )
-                                                  : null,
-                                              child: busy
-                                                  ? const SizedBox(
-                                                      width: 16,
-                                                      height: 16,
-                                                      child:
-                                                          CircularProgressIndicator(
-                                                            strokeWidth: 2,
-                                                            color: paperCard,
-                                                          ),
-                                                    )
-                                                  : const Text('下载'),
-                                            ),
-                                          ],
-                                        );
-                                      },
-                                    ),
-                                  ],
-                                ),
-                              ),
-                        ],
-                      ),
-                    ),
-                ],
-              );
-            },
-          ),
+          child: currentTab == 'materials'
+              ? _buildMaterials()
+              : _buildAssignments(),
         ),
       ],
     ),
+  );
+
+  Widget _buildMaterials() => FutureBuilder<List<Json>>(
+    future: materials,
+    builder: (context, snapshot) {
+      if (snapshot.connectionState == ConnectionState.waiting) {
+        return const Center(
+          child: CircularProgressIndicator(color: blue),
+        );
+      }
+      if (snapshot.hasError) {
+        return Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.cloud_off, color: seal),
+              const SizedBox(height: 10),
+              Text(
+                snapshot.error is AppError
+                    ? (snapshot.error as AppError).message
+                    : '课件加载失败，请稍后重试',
+                style: const TextStyle(color: ink),
+              ),
+              const SizedBox(height: 10),
+              OutlinedButton(
+                onPressed: _refreshMaterials,
+                child: const Text('重新加载'),
+              ),
+            ],
+          ),
+        );
+      }
+      final items = snapshot.data ?? [];
+      if (items.isEmpty) {
+        return const PageEmpty(icon: 'folder', title: '该课程暂无资料');
+      }
+      return ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          for (final m in items)
+            Container(
+              margin: const EdgeInsets.only(bottom: 14),
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: paper,
+                border: Border.all(color: ink.withValues(alpha: .15)),
+                borderRadius: BorderRadius.circular(3),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    text(m, 'title'),
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  if (rows(m['files']).isEmpty)
+                    const Text(
+                      '无附件',
+                      style: TextStyle(fontSize: 12, color: ink),
+                    )
+                  else
+                    for (final f in rows(m['files']))
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(
+                          text(f, 'name'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        trailing: Wrap(
+                          spacing: 4,
+                          children: [
+                            Builder(
+                              builder: (context) {
+                                final fileId = text(
+                                  f,
+                                  'id',
+                                  text(f, 'fileId'),
+                                );
+                                final busy = busyFileIds.contains(
+                                  fileId,
+                                );
+                                return Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    OutlinedButton(
+                                      onPressed: !busy
+                                          ? () => runFileAction(
+                                              f,
+                                              widget.onPreview,
+                                            )
+                                          : null,
+                                      child: const Text('预览'),
+                                    ),
+                                    FilledButton(
+                                      onPressed: !busy
+                                          ? () => runFileAction(
+                                              f,
+                                              widget.onDownload,
+                                            )
+                                          : null,
+                                      child: busy
+                                          ? const SizedBox(
+                                              width: 16,
+                                              height: 16,
+                                              child:
+                                                  CircularProgressIndicator(
+                                                    strokeWidth: 2,
+                                                    color: paperCard,
+                                                  ),
+                                            )
+                                          : const Text('下载'),
+                                    ),
+                                  ],
+                                );
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                ],
+              ),
+            ),
+        ],
+      );
+    },
+  );
+
+  Widget _buildAssignments() => FutureBuilder<List<Json>>(
+    future: assignments,
+    builder: (context, snapshot) {
+      if (snapshot.connectionState == ConnectionState.waiting) {
+        return const Center(
+          child: CircularProgressIndicator(color: blue),
+        );
+      }
+      if (snapshot.hasError) {
+        return Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.cloud_off, color: seal),
+              const SizedBox(height: 10),
+              Text(
+                snapshot.error is AppError
+                    ? (snapshot.error as AppError).message
+                    : '作业加载失败，请稍后重试',
+                style: const TextStyle(color: ink),
+              ),
+              const SizedBox(height: 10),
+              OutlinedButton(
+                onPressed: _refreshAssignments,
+                child: const Text('重新加载'),
+              ),
+            ],
+          ),
+        );
+      }
+      final items = snapshot.data ?? [];
+      if (items.isEmpty) {
+        return const PageEmpty(
+          icon: 'checklist-paper',
+          title: '该课程暂无作业',
+          description: '当前课程下未发布任何作业任务。',
+        );
+      }
+      final sorted = List<Json>.from(items)..sort(compareAssignments);
+      return ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          for (final a in sorted)
+            AssignmentCard(
+              assignment: {
+                ...a,
+                if (text(a, 'courseName').isEmpty)
+                  'courseName': text(widget.course, 'name'),
+              },
+              now: DateTime.now(),
+              urgentHours: 48,
+              backgroundColor: paper,
+              onTap: () => _openAssignmentDetail(a),
+            ),
+        ],
+      );
+    },
   );
 }
 
@@ -2427,42 +2793,203 @@ class TimetableView extends StatelessWidget {
     super.key,
     required this.entries,
     required this.semester,
+    this.wide = false,
+    this.choices = const [],
+    this.refreshing = false,
+    this.isExporting = false,
+    this.onSemesterChanged,
+    this.onExportPng,
+    this.onExportXlsx,
+    this.onRefresh,
   });
   final List<TimetableEntry> entries;
   final String semester;
+  final bool wide;
+  final List<SemesterChoice> choices;
+  final bool refreshing;
+  final bool isExporting;
+  final ValueChanged<String>? onSemesterChanged;
+  final VoidCallback? onExportPng;
+  final VoidCallback? onExportXlsx;
+  final VoidCallback? onRefresh;
+
   @override
   Widget build(BuildContext context) {
     final merged = mergeTimetable(entries);
     final courses = merged.map((e) => e.courseName).toSet().toList();
+    final showHeader = !isExporting;
+
     return Container(
       width: double.infinity,
       color: paperCard,
       padding: const EdgeInsets.all(14),
       child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            '浙江大学课程表（$semester）',
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-          ),
+          if (showHeader)
+            _header(context)
+          else
+            Center(
+              child: Text(
+                '浙江大学课程表（$semester）',
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+            ),
           const SizedBox(height: 10),
-          _gridHeader(),
-          SizedBox(
-            height: 13 * 52,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SizedBox(
-                  width: 64,
-                  child: Column(
-                    children: [for (var i = 1; i <= 13; i++) _sectionLabel(i)],
+          if (entries.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 48),
+              child: PageEmpty(icon: 'calendar-grid', title: '该学期暂无课表数据'),
+            )
+          else ...[
+            _gridHeader(),
+            SizedBox(
+              height: 13 * 52,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 64,
+                    child: Column(
+                      children: [for (var i = 1; i <= 13; i++) _sectionLabel(i)],
+                    ),
                   ),
-                ),
-                for (var day = 1; day <= 7; day++)
-                  Expanded(child: _dayColumn(day, merged, courses)),
-              ],
+                  for (var day = 1; day <= 7; day++)
+                    Expanded(child: _dayColumn(day, merged, courses)),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _header(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final compactActions = constraints.maxWidth < 560;
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  for (final choice in choices) ...[
+                    _semesterTab(choice, compact: compactActions),
+                    const SizedBox(width: 8),
+                  ],
+                ],
+              ),
             ),
           ),
+          const SizedBox(width: 8),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (compactActions) ...[
+                IconButton(
+                  onPressed: entries.isEmpty ? null : onExportPng,
+                  tooltip: '导出图片',
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.image_outlined, size: 18),
+                ),
+                IconButton(
+                  onPressed: entries.isEmpty ? null : onExportXlsx,
+                  tooltip: '导出 Excel',
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.table_chart_outlined, size: 18),
+                ),
+                IconButton(
+                  onPressed: refreshing ? null : onRefresh,
+                  tooltip: '刷新课表',
+                  visualDensity: VisualDensity.compact,
+                  icon: refreshing
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: blue,
+                          ),
+                        )
+                      : const Icon(Icons.refresh, size: 18),
+                ),
+              ] else ...[
+                TextButton.icon(
+                  onPressed: entries.isEmpty ? null : onExportPng,
+                  icon: const Icon(Icons.image_outlined, size: 16),
+                  label: const Text('导出图片'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: ink,
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                TextButton.icon(
+                  onPressed: entries.isEmpty ? null : onExportXlsx,
+                  icon: const Icon(Icons.table_chart_outlined, size: 16),
+                  label: const Text('导出 Excel'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: ink,
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                IconButton(
+                  onPressed: refreshing ? null : onRefresh,
+                  tooltip: '刷新课表',
+                  icon: refreshing
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: blue,
+                          ),
+                        )
+                      : const Icon(Icons.refresh, size: 18),
+                ),
+              ],
+            ],
+          ),
         ],
+      );
+    },
+  );
+
+  Widget _semesterTab(SemesterChoice choice, {bool compact = false}) {
+    final isSelected = choice.id == semester;
+    return InkWell(
+      onTap: () {
+        if (choice.id != semester) {
+          onSemesterChanged?.call(choice.id);
+        }
+      },
+      borderRadius: BorderRadius.circular(6),
+      child: Container(
+        padding: EdgeInsets.symmetric(
+          horizontal: compact ? 10 : 14,
+          vertical: 6,
+        ),
+        decoration: BoxDecoration(
+          color: isSelected ? blue.withValues(alpha: .14) : Colors.transparent,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: isSelected ? blue : ink.withValues(alpha: .18),
+            width: isSelected ? 1.5 : 1,
+          ),
+        ),
+        child: Text(
+          choice.name,
+          style: TextStyle(
+            fontSize: compact ? 12 : 13,
+            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+            color: isSelected ? blue : ink,
+          ),
+        ),
       ),
     );
   }
@@ -2988,9 +3515,11 @@ class SideSection extends StatelessWidget {
     required this.title,
     required this.children,
     this.icon,
+    this.trailing,
   });
   final String title;
   final String? icon;
+  final Widget? trailing;
   final List<Widget> children;
   @override
   Widget build(BuildContext context) => Column(
@@ -3018,6 +3547,10 @@ class SideSection extends StatelessWidget {
           Expanded(
             child: Container(height: 1, color: ink.withValues(alpha: .15)),
           ),
+          if (trailing != null) ...[
+            const SizedBox(width: 6),
+            trailing!,
+          ],
         ],
       ),
       const SizedBox(height: 16),
@@ -3086,11 +3619,13 @@ class PageHead extends StatelessWidget {
   const PageHead({
     super.key,
     required this.title,
+    this.titleSuffix,
     this.subtitle,
     this.updatedAt,
     this.trailing,
   });
   final String title;
+  final Widget? titleSuffix;
   final String? subtitle, updatedAt;
   final Widget? trailing;
   @override
@@ -3098,13 +3633,22 @@ class PageHead extends StatelessWidget {
     final heading = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          title,
-          style: const TextStyle(
-            fontSize: 27,
-            fontWeight: FontWeight.bold,
-            letterSpacing: 2,
-          ),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Text(
+              title,
+              style: const TextStyle(
+                fontSize: 27,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 2,
+              ),
+            ),
+            if (titleSuffix != null) ...[
+              const SizedBox(width: 12),
+              Flexible(child: titleSuffix!),
+            ],
+          ],
         ),
         if (subtitle != null)
           Padding(
@@ -3389,7 +3933,10 @@ class SemesterChoice {
   final String id, name;
 }
 
-List<SemesterChoice> semesterChoices(List<Json> raw) {
+List<SemesterChoice> semesterChoices(
+  List<Json> raw, {
+  bool includeAll = true,
+}) {
   final map = <String, SemesterChoice>{};
   for (final s in raw) {
     final name = text(s, 'name'), id = semesterToId(name) ?? text(s, 'id');
@@ -3417,7 +3964,9 @@ List<SemesterChoice> semesterChoices(List<Json> raw) {
     );
   }
   final result = map.values.toList()..sort((a, b) => b.id.compareTo(a.id));
-  result.add(const SemesterChoice('all', '全部学期（所有历史课程）'));
+  if (includeAll) {
+    result.add(const SemesterChoice('all', '全部学期（所有历史课程）'));
+  }
   return result;
 }
 
@@ -3435,12 +3984,31 @@ int? deadlineMs(Json a) {
   return date?.millisecondsSinceEpoch;
 }
 
+const oneWeekMs = 7 * 24 * 3600 * 1000;
+
+bool isVisibleAssignment(Json a, int nowMs) {
+  final due = deadlineMs(a);
+  if (due == null) return true;
+  if (due > nowMs) return true;
+  return nowMs - due <= oneWeekMs;
+}
+
 int? examMs(Json a) {
   final date = DateTime.tryParse(text(a, 'time'));
   return date?.millisecondsSinceEpoch;
 }
 
 bool isSubmitted(Json a) => a['submitted'] == true;
+
+int compareAssignments(Json a, Json b) {
+  final subA = isSubmitted(a), subB = isSubmitted(b);
+  if (subA != subB) return subA ? 1 : -1;
+  final da = deadlineMs(a), db = deadlineMs(b);
+  if (da == null && db == null) return 0;
+  if (da == null) return 1;
+  if (db == null) return -1;
+  return da.compareTo(db);
+}
 
 String formatDateTime(String raw) {
   final date = DateTime.tryParse(raw);

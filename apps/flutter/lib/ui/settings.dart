@@ -32,6 +32,7 @@ class _SettingsPageState extends State<SettingsPage> {
       model = TextEditingController(text: 'gpt-4.1-mini');
   String protocol = 'openai', message = '';
   bool busy = false, loaded = false;
+  bool modelsExpanded = false, personaExpanded = false;
   bool campusCredentialSaved = false;
   Json app = {};
   List<Json> providers = [];
@@ -61,6 +62,9 @@ class _SettingsPageState extends State<SettingsPage> {
         campusCredentialSaved = campus != null;
         providers = rows(saved?['items'] ?? []);
         if (providers.isNotEmpty) selectProvider(0);
+        if (widget.setup || providers.isEmpty) {
+          modelsExpanded = true;
+        }
         loaded = true;
       });
     } catch (e) {
@@ -343,6 +347,39 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
+  Widget collapsibleHeader({
+    required String title,
+    required bool expanded,
+    required VoidCallback onToggle,
+    Widget? summary,
+  }) => InkWell(
+    onTap: onToggle,
+    borderRadius: BorderRadius.circular(4),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        children: [
+          Text(title, style: const TextStyle(fontSize: 20)),
+          const SizedBox(width: 12),
+          if (!expanded && summary != null)
+            Expanded(child: summary)
+          else
+            const Spacer(),
+          Text(
+            expanded ? '收起' : '展开',
+            style: const TextStyle(fontSize: 13, color: blue),
+          ),
+          const SizedBox(width: 2),
+          Icon(
+            expanded ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+            color: blue,
+            size: 20,
+          ),
+        ],
+      ),
+    ),
+  );
+
   @override
   Widget build(BuildContext context) {
     if (!loaded) return const Center(child: CircularProgressIndicator());
@@ -418,170 +455,194 @@ class _SettingsPageState extends State<SettingsPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('贰 · 模型来源', style: TextStyle(fontSize: 20)),
-              const SizedBox(height: 18),
-              if (providers.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 14),
-                  child: DropdownButtonFormField<int>(
-                    initialValue: selected,
-                    decoration: const InputDecoration(labelText: '当前来源'),
-                    isExpanded: true,
-                    items: [
-                      for (var i = 0; i < providers.length; i++)
-                        DropdownMenuItem(
-                          value: i,
-                          child: Text(
-                            providerLabel(providers[i], i),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
+              collapsibleHeader(
+                title: '贰 · 模型来源',
+                expanded: modelsExpanded,
+                onToggle: () => setState(() => modelsExpanded = !modelsExpanded),
+                summary: providers.isNotEmpty
+                    ? Text(
+                        '${providerLabel(providers[selected], selected)} · ${model.text.trim().isEmpty ? '未填写模型' : model.text.trim()}',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: ink.withValues(alpha: .65),
                         ),
-                    ],
-                    onChanged: busy
-                        ? null
-                        : (v) => setState(() => selectProvider(v!)),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      )
+                    : Text(
+                        '尚未配置模型来源',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: ink.withValues(alpha: .45),
+                        ),
+                      ),
+              ),
+              if (modelsExpanded) ...[
+                const SizedBox(height: 18),
+                if (providers.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 14),
+                    child: DropdownButtonFormField<int>(
+                      initialValue: selected,
+                      decoration: const InputDecoration(labelText: '当前来源'),
+                      isExpanded: true,
+                      items: [
+                        for (var i = 0; i < providers.length; i++)
+                          DropdownMenuItem(
+                            value: i,
+                            child: Text(
+                              providerLabel(providers[i], i),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                      ],
+                      onChanged: busy
+                          ? null
+                          : (v) => setState(() => selectProvider(v!)),
+                    ),
                   ),
-                ),
-              Padding(
-                padding: const EdgeInsets.only(bottom: 14),
-                child: DropdownButtonFormField<String>(
-                  initialValue: protocol,
-                  decoration: const InputDecoration(labelText: '协议'),
-                  isExpanded: true,
-                  items: const [
-                    DropdownMenuItem(
-                      value: 'openai',
-                      child: Text('OpenAI 兼容协议'),
-                    ),
-                    DropdownMenuItem(
-                      value: 'anthropic',
-                      child: Text('Anthropic Messages'),
-                    ),
-                  ],
-                  onChanged: busy
-                      ? null
-                      : (v) => setState(() {
-                          protocol = v!;
-                          clearModelChecks();
-                        }),
-                ),
-              ),
-              field('来源备注名', providerName),
-              field(
-                'API 地址',
-                base,
-                onChanged: (_) => setState(clearModelChecks),
-              ),
-              field(
-                '模型名称',
-                model,
-                onChanged: (_) => setState(() {
-                  modelAvailable = null;
-                  availabilityMessage = '';
-                }),
-              ),
-              if (availableModels.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 14),
                   child: DropdownButtonFormField<String>(
-                    initialValue: availableModels.contains(model.text)
-                        ? model.text
-                        : null,
-                    decoration: const InputDecoration(
-                      labelText: '从 API 地址选择模型',
-                    ),
+                    initialValue: protocol,
+                    decoration: const InputDecoration(labelText: '协议'),
                     isExpanded: true,
-                    items: [
-                      for (final item in availableModels)
-                        DropdownMenuItem(
-                          value: item,
-                          child: Text(
-                            item,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
+                    items: const [
+                      DropdownMenuItem(
+                        value: 'openai',
+                        child: Text('OpenAI 兼容协议'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'anthropic',
+                        child: Text('Anthropic Messages'),
+                      ),
                     ],
                     onChanged: busy
                         ? null
-                        : (v) {
-                            if (v != null) setState(() => model.text = v);
-                          },
+                        : (v) => setState(() {
+                            protocol = v!;
+                            clearModelChecks();
+                          }),
                   ),
                 ),
-              field('API Key（留空保留）', key, secret: true),
-              if (modelListMessage.isNotEmpty)
-                modelStatus(message: modelListMessage),
-              if (availabilityMessage.isNotEmpty)
-                modelStatus(message: availabilityMessage, ok: modelAvailable),
-              Wrap(
-                spacing: 10,
-                runSpacing: 8,
-                children: [
-                  FilledButton(
-                    onPressed: busy ? null : () => perform(saveProvider),
-                    child: const Text('保存来源'),
+                field('来源备注名', providerName),
+                field(
+                  'API 地址',
+                  base,
+                  onChanged: (_) => setState(clearModelChecks),
+                ),
+                field(
+                  '模型名称',
+                  model,
+                  onChanged: (_) => setState(() {
+                    modelAvailable = null;
+                    availabilityMessage = '';
+                  }),
+                ),
+                if (availableModels.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 14),
+                    child: DropdownButtonFormField<String>(
+                      initialValue: availableModels.contains(model.text)
+                          ? model.text
+                          : null,
+                      decoration: const InputDecoration(
+                        labelText: '从 API 地址选择模型',
+                      ),
+                      isExpanded: true,
+                      items: [
+                        for (final item in availableModels)
+                          DropdownMenuItem(
+                            value: item,
+                            child: Text(
+                              item,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                      ],
+                      onChanged: busy
+                          ? null
+                          : (v) {
+                              if (v != null) setState(() => model.text = v);
+                            },
+                    ),
                   ),
-                  OutlinedButton(
-                    onPressed: busy ? null : () => perform(loadModels),
-                    child: const Text('读取可用模型'),
-                  ),
-                  OutlinedButton(
-                    onPressed: busy ? null : () => perform(checkProvider),
-                    child: const Text('检测可用性'),
-                  ),
-                  OutlinedButton(
-                    onPressed: busy
-                        ? null
-                        : () => setState(() {
-                            providers.add({
-                              'name': '新来源',
-                              'protocol': 'openai',
-                              'baseUrl': 'https://api.openai.com',
-                              'model': '',
-                              'enabled': true,
-                            });
-                            selectProvider(providers.length - 1);
-                          }),
-                    child: const Text('新增来源'),
-                  ),
-                  if (providers.isNotEmpty)
+                field('API Key（留空保留）', key, secret: true),
+                if (modelListMessage.isNotEmpty)
+                  modelStatus(message: modelListMessage),
+                if (availabilityMessage.isNotEmpty)
+                  modelStatus(message: availabilityMessage, ok: modelAvailable),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 8,
+                  children: [
+                    FilledButton(
+                      onPressed: busy ? null : () => perform(saveProvider),
+                      child: const Text('保存来源'),
+                    ),
+                    OutlinedButton(
+                      onPressed: busy ? null : () => perform(loadModels),
+                      child: const Text('读取可用模型'),
+                    ),
+                    OutlinedButton(
+                      onPressed: busy ? null : () => perform(checkProvider),
+                      child: const Text('检测可用性'),
+                    ),
                     OutlinedButton(
                       onPressed: busy
                           ? null
-                          : () => perform(() async {
-                              final p = providers.removeAt(selected);
-                              providers.insert(0, p);
-                              selected = 0;
-                              await widget.services.secrets.write('providers', {
-                                'items': providers,
+                          : () => setState(() {
+                              modelsExpanded = true;
+                              providers.add({
+                                'name': '新来源',
+                                'protocol': 'openai',
+                                'baseUrl': 'https://api.openai.com',
+                                'model': '',
+                                'enabled': true,
                               });
+                              selectProvider(providers.length - 1);
                             }),
-                      child: const Text('设为首选'),
+                      child: const Text('新增来源'),
                     ),
-                  if (providers.isNotEmpty)
-                    TextButton(
-                      onPressed: busy
-                          ? null
-                          : () => perform(() async {
-                              providers.removeAt(selected);
-                              selected = 0;
-                              await widget.services.secrets.write('providers', {
-                                'items': providers,
-                              });
-                              if (providers.isNotEmpty) {
-                                selectProvider(0);
-                              } else {
-                                providerName.clear();
-                                key.clear();
-                                model.clear();
-                              }
-                            }),
-                      child: const Text('删除来源'),
-                    ),
-                ],
-              ),
+                    if (providers.isNotEmpty)
+                      OutlinedButton(
+                        onPressed: busy
+                            ? null
+                            : () => perform(() async {
+                                final p = providers.removeAt(selected);
+                                providers.insert(0, p);
+                                selected = 0;
+                                await widget.services.secrets.write('providers', {
+                                  'items': providers,
+                                });
+                              }),
+                        child: const Text('设为首选'),
+                      ),
+                    if (providers.isNotEmpty)
+                      TextButton(
+                        onPressed: busy
+                            ? null
+                            : () => perform(() async {
+                                providers.removeAt(selected);
+                                selected = 0;
+                                await widget.services.secrets.write('providers', {
+                                  'items': providers,
+                                });
+                                if (providers.isNotEmpty) {
+                                  selectProvider(0);
+                                } else {
+                                  providerName.clear();
+                                  key.clear();
+                                  model.clear();
+                                }
+                              }),
+                        child: const Text('删除来源'),
+                      ),
+                  ],
+                ),
+              ],
             ],
           ),
         ),
@@ -589,54 +650,85 @@ class _SettingsPageState extends State<SettingsPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('叁 · 个性化', style: TextStyle(fontSize: 20)),
-              const SizedBox(height: 18),
-              Center(
-                child: UserAvatar(
-                  dataUrl: text(app, 'avatarDataUrl'),
-                  radius: 44,
-                  onTap: busy ? null : () => perform(changeAvatar),
+              collapsibleHeader(
+                title: '叁 · 个性化',
+                expanded: personaExpanded,
+                onToggle: () => setState(() => personaExpanded = !personaExpanded),
+                summary: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (text(app, 'avatarDataUrl').isNotEmpty) ...[
+                      UserAvatar(
+                        dataUrl: text(app, 'avatarDataUrl'),
+                        radius: 12,
+                      ),
+                      const SizedBox(width: 8),
+                    ],
+                    Flexible(
+                      child: Text(
+                        nickname.text.trim().isNotEmpty
+                            ? '昵称：${nickname.text.trim()}'
+                            : '未设置昵称与提示词',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: ink.withValues(alpha: .65),
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 8),
-              const Center(
-                child: Text(
-                  '点击头像更换',
-                  style: TextStyle(fontSize: 11, color: gold),
-                ),
-              ),
-              const SizedBox(height: 16),
-              field('昵称', nickname),
-              field('默认提示词 / 年级、专业与偏好', persona, lines: 4),
-              Wrap(
-                spacing: 10,
-                children: [
-                  FilledButton(
-                    onPressed: busy
-                        ? null
-                        : () => perform(() async {
-                            if (nickname.text.length > 24 ||
-                                persona.text.length > 2000) {
-                              throw const AppError(
-                                'INVALID_INPUT',
-                                '昵称最多24字，提示词最多2000字。',
-                              );
-                            }
-                            app = {
-                              ...app,
-                              'nickname': nickname.text.trim(),
-                              'personaPrompt': persona.text.trim(),
-                            };
-                            await widget.services.db.put(
-                              'settings',
-                              'app',
-                              app,
-                            );
-                          }),
-                    child: const Text('保存个性化'),
+              if (personaExpanded) ...[
+                const SizedBox(height: 18),
+                Center(
+                  child: UserAvatar(
+                    dataUrl: text(app, 'avatarDataUrl'),
+                    radius: 44,
+                    onTap: busy ? null : () => perform(changeAvatar),
                   ),
-                ],
-              ),
+                ),
+                const SizedBox(height: 8),
+                const Center(
+                  child: Text(
+                    '点击头像更换',
+                    style: TextStyle(fontSize: 11, color: gold),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                field('昵称', nickname),
+                field('默认提示词 / 年级、专业与偏好', persona, lines: 4),
+                Wrap(
+                  spacing: 10,
+                  children: [
+                    FilledButton(
+                      onPressed: busy
+                          ? null
+                          : () => perform(() async {
+                              if (nickname.text.length > 24 ||
+                                  persona.text.length > 2000) {
+                                throw const AppError(
+                                  'INVALID_INPUT',
+                                  '昵称最多24字，提示词最多2000字。',
+                                );
+                              }
+                              app = {
+                                ...app,
+                                'nickname': nickname.text.trim(),
+                                'personaPrompt': persona.text.trim(),
+                              };
+                              await widget.services.db.put(
+                                'settings',
+                                'app',
+                                app,
+                              );
+                            }),
+                      child: const Text('保存个性化'),
+                    ),
+                  ],
+                ),
+              ],
             ],
           ),
         ),
