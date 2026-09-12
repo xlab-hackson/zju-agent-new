@@ -57,6 +57,8 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
     }
   }
 
+  bool get _isSelected => isCourseSelected(widget.course);
+
   bool get _isLearningCreated =>
       widget.course['learningZjuCreated'] == true ||
       (widget.course['learningZjuCreated'] != false &&
@@ -184,6 +186,44 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
         runSpacing: 4,
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
+          if (!_isSelected)
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.info_outline,
+                  size: 13,
+                  color: ink.withValues(alpha: .65),
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  '未选中',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: ink.withValues(alpha: .65),
+                  ),
+                ),
+              ],
+            )
+          else if (!_isLearningCreated)
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.info_outline,
+                  size: 13,
+                  color: ink.withValues(alpha: .65),
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  '未建课',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: ink.withValues(alpha: .65),
+                  ),
+                ),
+              ],
+            ),
           if (time.isNotEmpty)
             Row(
               mainAxisSize: MainAxisSize.min,
@@ -303,7 +343,20 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
                   }
                 },
               ),
-              if (!_isLearningCreated) ...[
+              if (!_isSelected) ...[
+                const Spacer(),
+                Flexible(
+                  child: Text(
+                    '教务网未选中此课程',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: ink.withValues(alpha: .5),
+                    ),
+                  ),
+                ),
+              ] else if (!_isLearningCreated) ...[
                 const Spacer(),
                 Flexible(
                   child: Text(

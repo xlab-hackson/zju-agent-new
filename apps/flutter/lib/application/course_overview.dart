@@ -81,6 +81,7 @@ Future<Json> loadCourseOverview(
     String scheduleTime = '',
     String score = '',
     String gpa = '',
+    bool selected = true,
   }) {
     final rawName = cleanCourseExtraSuffix(name);
     if (rawName.isEmpty) return;
@@ -98,6 +99,8 @@ Future<Json> loadCourseOverview(
         'xkkh': xkkh,
         'location': location,
         'scheduleTime': scheduleTime,
+        'selected': selected,
+        'enrolled': selected,
         if (score.isNotEmpty) 'score': score,
         if (score.isNotEmpty) 'original': score,
         if (gpa.isNotEmpty) 'gpa': gpa,
@@ -105,6 +108,10 @@ Future<Json> loadCourseOverview(
       };
     } else {
       final existing = zdbkCoursesMap[key]!;
+      if (!selected) {
+        existing['selected'] = false;
+        existing['enrolled'] = false;
+      }
       if ((existing['credit'] as num? ?? 0) <= 0 && credit > 0) {
         existing['credit'] = credit;
       }
@@ -139,6 +146,7 @@ Future<Json> loadCourseOverview(
     final teacher = text(e, 'teacher').trim();
     final xkkh = text(e, 'xkkh').trim();
     final loc = text(e, 'location').trim();
+    final isSel = isCourseSelected(e);
     addOrUpdateZdbkCourse(
       name: n,
       semester: sem.isNotEmpty ? sem : semester,
@@ -146,16 +154,20 @@ Future<Json> loadCourseOverview(
       teacher: teacher,
       xkkh: xkkh,
       location: loc,
+      selected: isSel,
     );
   }
 
   // 2. Ingest timetable entries from ZDBK (教务网课表)
   for (final e in ttEntries) {
     final sem = e.semester.trim().isNotEmpty ? e.semester.trim() : semester;
-    final weekText = e.weeks.isNotEmpty ? '${compressWeeks(e.weeks)} 周' : '';
-    final subText = e.subSemester.isNotEmpty ? '${e.subSemester} ' : '';
-    final timeStr =
-        '周${weekdayName(e.weekday)} ${e.startSection}-${e.endSection}节 ($subText$weekText)';
+    final weekText = e.weeks.isNotEmpty ? '${compressWeeks(e.weeks)}周' : '';
+    final subText = e.subSemester.isNotEmpty ? e.subSemester : '';
+    final details = [if (subText.isNotEmpty) subText, if (weekText.isNotEmpty) weekText].join(' ');
+    final detailsStr = details.isNotEmpty ? ' ($details)' : '';
+    final timeStr = e.weekday >= 1 && e.startSection >= 1
+        ? '周${weekdayName(e.weekday)} ${e.startSection}-${e.endSection}节$detailsStr'
+        : '';
     addOrUpdateZdbkCourse(
       name: e.courseName,
       semester: sem,
@@ -164,6 +176,7 @@ Future<Json> loadCourseOverview(
       xkkh: e.id,
       location: e.location,
       scheduleTime: timeStr,
+      selected: e.selected && isCourseSelected(e.toJson()),
     );
   }
 
@@ -175,12 +188,21 @@ Future<Json> loadCourseOverview(
       final semFromCid = cid.replaceFirst('timetable:', '').trim();
       if (cItem != null && cItem['items'] is List) {
         for (final row in rows(cItem['items'])) {
-          final tName = text(row, 'courseName').trim();
-          final tTeacher = text(row, 'teacher').trim();
-          final tCredit = double.tryParse('${row['credit']}') ?? 0.0;
-          final tXkkh = text(row, 'classCode', text(row, 'xkkh')).trim();
-          final tLoc = text(row, 'location', text(row, 'room')).trim();
+          final entry = TimetableEntry.fromJson(row);
+          final tName = text(row, 'courseName', entry.courseName).trim();
+          final tTeacher = text(row, 'teacher', entry.teacher).trim();
+          final tCredit = double.tryParse('${row['credit']}') ?? entry.credit;
+          final tXkkh = text(row, 'classCode', text(row, 'xkkh', entry.id)).trim();
+          final tLoc = text(row, 'location', text(row, 'room', entry.location)).trim();
           final tSem = semFromCid.isNotEmpty ? semFromCid : semester;
+          final weekText = entry.weeks.isNotEmpty ? '${compressWeeks(entry.weeks)}周' : '';
+          final subText = entry.subSemester.isNotEmpty ? entry.subSemester : '';
+          final details = [if (subText.isNotEmpty) subText, if (weekText.isNotEmpty) weekText].join(' ');
+          final detailsStr = details.isNotEmpty ? ' ($details)' : '';
+          final timeStr = entry.weekday >= 1 && entry.startSection >= 1
+              ? '周${weekdayName(entry.weekday)} ${entry.startSection}-${entry.endSection}节$detailsStr'
+              : '';
+          final isSel = entry.selected && isCourseSelected(row);
           if (tName.isNotEmpty) {
             addOrUpdateZdbkCourse(
               name: tName,
@@ -189,6 +211,8 @@ Future<Json> loadCourseOverview(
               teacher: tTeacher,
               xkkh: tXkkh,
               location: tLoc,
+              scheduleTime: timeStr,
+              selected: isSel,
             );
           }
         }
@@ -223,6 +247,7 @@ Future<Json> loadCourseOverview(
   // 5. Match each unified 教务网 course with 学在浙大 (rawCourses)
   final courses = <Json>[];
   if (zdbkCoursesMap.isNotEmpty) {
+    final matchedLearningCourseIds = <String>{};
     for (final entry in zdbkCoursesMap.entries) {
       final zItem = entry.value;
       final zName = text(zItem, 'name');
@@ -265,10 +290,30 @@ Future<Json> loadCourseOverview(
         }
       }
 
-      // 5.3 Match by normalized name if only 1 candidate exists
+      // 5.3 Match by prefix or containment if normalized name matches base name
+      if (matchedLearning == null) {
+        for (final lc in rawCourses) {
+          final lcName = text(lc, 'name').trim();
+          final lcNorm = normalizeCourseName(lcName);
+          if (lcNorm.startsWith(zNorm) || zNorm.startsWith(lcNorm)) {
+            final lcSemId = text(lc, 'semesterId');
+            final lcZdbkSem =
+                semesterIdToZdbkCode[lcSemId] ?? semesterToId(lcSemId) ?? '';
+            if (lcZdbkSem == zSem) {
+              matchedLearning = lc;
+              break;
+            }
+          }
+        }
+      }
+
+      // 5.4 Match by normalized name or prefix if only 1 candidate exists
       if (matchedLearning == null) {
         final candidates = rawCourses.where((lc) {
-          return normalizeCourseName(text(lc, 'name').trim()) == zNorm;
+          final lcNorm = normalizeCourseName(text(lc, 'name').trim());
+          return lcNorm == zNorm ||
+              lcNorm.startsWith(zNorm) ||
+              zNorm.startsWith(lcNorm);
         }).toList();
         if (candidates.length == 1) {
           matchedLearning = candidates.first;
@@ -277,9 +322,17 @@ Future<Json> loadCourseOverview(
 
       final isCreated =
           matchedLearning != null && text(matchedLearning, 'id').isNotEmpty;
+      if (isCreated) {
+        matchedLearningCourseIds.add(text(matchedLearning, 'id'));
+      }
+
+      final isSelected = isCourseSelected(zItem);
+
       courses.add({
         ...zItem,
         'id': isCreated ? text(matchedLearning, 'id') : '',
+        'selected': isSelected,
+        'enrolled': isSelected,
         'learningZjuCreated': isCreated,
         if (isCreated && text(matchedLearning, 'teachingClassName').isNotEmpty)
           'teachingClassName': text(matchedLearning, 'teachingClassName'),
@@ -289,10 +342,44 @@ Future<Json> loadCourseOverview(
           'teacher': text(matchedLearning, 'teacher'),
       });
     }
+
+    // 5.5 Add unmatched courses from rawCourses (学在浙大)
+    for (final lc in rawCourses) {
+      final lId = text(lc, 'id').trim();
+      if (lId.isNotEmpty && matchedLearningCourseIds.contains(lId)) {
+        continue;
+      }
+      final lName = text(lc, 'name').trim();
+      if (lName.isEmpty) continue;
+      final lNorm = normalizeCourseName(cleanCourseExtraSuffix(lName));
+      final lcSemId = text(lc, 'semesterId').trim();
+      final normSem =
+          semesterIdToZdbkCode[lcSemId] ?? semesterToId(lcSemId) ?? lcSemId;
+      if (zdbkCoursesMap.containsKey('$normSem|$lNorm')) {
+        continue;
+      }
+
+      final isSel = isCourseSelected(lc);
+      courses.add({
+        ...lc,
+        'semesterId': normSem,
+        'semester': normSem,
+        'selected': isSel,
+        'enrolled': isSel,
+        'learningZjuCreated': true,
+      });
+    }
   } else {
     // Fallback if no ZDBK course data is found at all (e.g. offline unit tests)
     for (final c in rawCourses) {
-      courses.add({...c, 'learningZjuCreated': text(c, 'id').isNotEmpty});
+      final isSel = isCourseSelected(c);
+      courses.add({
+        ...c,
+        'selected': isSel,
+        'enrolled': isSel,
+        'learningZjuCreated': c['learningZjuCreated'] == true ||
+            (c['learningZjuCreated'] != false && text(c, 'id').isNotEmpty),
+      });
     }
   }
 

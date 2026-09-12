@@ -1,3 +1,4 @@
+import '../../domain/course_catalog.dart';
 import '../../domain/models.dart';
 import '../services.dart';
 import 'cache_timestamp.dart';
@@ -8,10 +9,15 @@ Future<Json> loadCoursesPage(
   bool refresh = false,
 }) async {
   final semesters = await s.campus.semesters(refresh: refresh);
-  final timetable = (await s.campus.timetable(
+  final allEntries = await s.campus.timetable(
     semester,
     refresh: refresh,
-  )).map((e) => e.toJson()).toList();
+  );
+  final timetable = allEntries
+      .where((e) => e.selected && isCourseSelected(e.toJson()))
+      .map((e) => e.toJson())
+      .toList();
+
   return {
     'semesters': semesters,
     'timetable': timetable,

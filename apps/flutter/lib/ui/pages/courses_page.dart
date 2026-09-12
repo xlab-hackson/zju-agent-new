@@ -36,6 +36,25 @@ class _CoursesPageState extends CampusPageState<CoursesPage>
   bool get preloadOverview => true;
   @override
   bool get showRefreshButton => false;
+
+  @override
+  void initState() {
+    overviewSemester = semester;
+    super.initState();
+  }
+
+  @override
+  void onOverviewSemesterChanged(String value) {
+    super.onOverviewSemesterChanged(value);
+    if (value != 'all' && value != semester) {
+      setState(() {
+        semester = value;
+      });
+      syncPageContext();
+      refresh(force: false);
+    }
+  }
+
   @override
   Future<Json> load({bool refresh = false}) =>
       loadCoursesPage(s, semester, refresh: refresh);
@@ -128,9 +147,11 @@ class _CoursesPageState extends CampusPageState<CoursesPage>
           onSemesterChanged: (id) {
             setState(() {
               semester = id;
+              overviewSemester = id;
             });
             syncPageContext();
             refresh(force: false);
+            notifyOverviewChanged();
           },
           onExportPng: () => act(_exportTimetablePng),
           onExportXlsx: () => act(() => exportXlsx(entries, semester)),
