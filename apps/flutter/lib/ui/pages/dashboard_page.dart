@@ -84,6 +84,8 @@ class _DashboardPageState extends CampusPageState<DashboardPage>
     if (snapshot.hasError) return [Paper(child: Text('${snapshot.error}'))];
     final d = snapshot.data ?? {};
     final settings = object(d['settings'] ?? {});
+    // 隐藏绩点只作用于本卡的绩点与均分；辅助栏、课程表与课程列表仍正常显示。
+    final hideGpa = settings['hideGpa'] == true;
     final schedule = object(d['schedule'] ?? {});
     final events = rows(schedule['events'] ?? []);
     final rawAssignments = rows(d['assignments'] ?? []);
@@ -201,6 +203,7 @@ class _DashboardPageState extends CampusPageState<DashboardPage>
         relaxedCount: relaxedAssignments.length,
         submittedCount: submittedAssignments.length,
         gradeStats: gradeStats,
+        hideGpa: hideGpa,
       ),
       ChapterHead(juan: '卷三', title: '校园百宝箱', icon: 'scroll'),
       _toolGrid(),
@@ -244,6 +247,7 @@ class _DashboardPageState extends CampusPageState<DashboardPage>
     required int relaxedCount,
     required int submittedCount,
     required GradeStats gradeStats,
+    required bool hideGpa,
   }) => LayoutBuilder(
     builder: (context, constraints) {
       final columns = constraints.maxWidth >= 900
@@ -343,7 +347,9 @@ class _DashboardPageState extends CampusPageState<DashboardPage>
               icon: 'area-chart',
               items: [
                 MultiMetricItem(
-                  value: gradeStats.hasData && gradeStats.gpa > 0
+                  value: hideGpa
+                      ? '*'
+                      : gradeStats.hasData && gradeStats.gpa > 0
                       ? gradeStats.gpa.toStringAsFixed(2)
                       : '--',
                   label: '目前总绩点',
@@ -368,7 +374,9 @@ class _DashboardPageState extends CampusPageState<DashboardPage>
                   },
                 ),
                 MultiMetricItem(
-                  value: gradeStats.hasData && gradeStats.averageScore > 0
+                  value: hideGpa
+                      ? '*'
+                      : gradeStats.hasData && gradeStats.averageScore > 0
                       ? gradeStats.averageScore.toStringAsFixed(1)
                       : '--',
                   label: '百分制均分',
@@ -399,6 +407,23 @@ class _DashboardPageState extends CampusPageState<DashboardPage>
     },
   );
 
+  /// 需要校园网才能直接访问的站点：不在校园网时改用 WebVPN 打开。
+  static const _campusOnlyHosts = {'www.cc98.org'};
+
+  /// 打开百宝箱条目。只有已知需要校园网的站点才做校园网判断与 WebVPN 提示。
+  Future<void> openTool(String label, String url) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null || !_campusOnlyHosts.contains(uri.host)) {
+      return openExternal(url);
+    }
+    return openCampusLink(
+      context,
+      uri,
+      label: label,
+      onCampusNetwork: () => s.campus.onCampusNetwork(),
+    );
+  }
+
   Widget _toolGrid() {
     const tools = [
       ('智云课堂', 'video-lesson-play', 'https://classroom.zju.edu.cn'),
@@ -406,7 +431,7 @@ class _DashboardPageState extends CampusPageState<DashboardPage>
       ('本科生教务系统', 'university', 'http://jwbinfosys.zju.edu.cn'),
       ('CC98 论坛', 'comment-thread', 'https://www.cc98.org'),
       ('校网充值与查询', 'payment-card', 'https://myvpn.zju.edu.cn'),
-      ('图书馆座位预约', 'library-public', 'http://libsys.zju.edu.cn'),
+      ('图书馆座位预约', 'library-public', 'https://booking.lib.zju.edu.cn'),
       ('校务综合服务大厅', 'school-building', 'https://service.zju.edu.cn'),
       ('ETA 成绩分析', 'area-chart', null),
     ];
@@ -431,7 +456,7 @@ class _DashboardPageState extends CampusPageState<DashboardPage>
                   url: tool.$3,
                   onOpen: tool.$3 == null
                       ? null
-                      : () => act(() => openExternal(tool.$3!)),
+                      : () => act(() => openTool(tool.$1, tool.$3!)),
                 ),
               ),
           ],

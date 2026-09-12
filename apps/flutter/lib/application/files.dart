@@ -39,6 +39,19 @@ String confinedPath(String root, String relative) {
   return result;
 }
 
+/// 相对 [root] 的 [relative] 是否指向一个真实存在的文件。
+///
+/// 下载记录只存相对路径，换过下载根目录后旧记录会落到 false，下载页据此
+/// 显示「已被移除」。历史脏数据里的非法相对路径同样按 false 处理。
+Future<bool> localFileExists(String root, String relative) async {
+  if (relative.isEmpty) return false;
+  try {
+    return await File(confinedPath(root, relative)).exists();
+  } on AppError {
+    return false;
+  }
+}
+
 class FileService {
   FileService(this.campus, Directory initialRoot, {Directory? defaultRoot})
       : _root = initialRoot,

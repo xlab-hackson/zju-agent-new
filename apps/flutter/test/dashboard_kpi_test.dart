@@ -506,5 +506,44 @@ void main() {
         expect(find.text('微积分（甲）Ⅱ'), findsOneWidget);
       },
     );
+
+    testWidgets(
+      '工作台「学业成绩」卡在开启隐藏绩点时用 * 代替绩点与均分',
+      (tester) async {
+        final db = AgentDatabase.memory();
+        addTearDown(() => db.close());
+        final secrets = _FakeSecrets();
+        final campus = CampusService(CampusSession(secrets), db);
+        final tempDir = Directory.systemTemp.createTempSync('kpi_hide_gpa_');
+        final files = FileService(campus, tempDir);
+        final backups = BackupService(db, files);
+        final agent = AgentService(campus, files, GuideIndex(const {}));
+        final services = AppServices(
+          db,
+          secrets,
+          campus,
+          files,
+          backups,
+          agent,
+        );
+        services.claimInitialRefresh('/');
+        await db.put('settings', 'app', {'hideGpa': true});
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: FeaturePage(services: services, page: '/'),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // 三张指标仍在，绩点与均分被替换为 *，学分不在隐藏范围内
+        expect(find.text('目前总绩点'), findsOneWidget);
+        expect(find.text('百分制均分'), findsOneWidget);
+        expect(find.text('获得总学分'), findsOneWidget);
+        expect(find.text('*'), findsNWidgets(2));
+      },
+    );
   });
 }

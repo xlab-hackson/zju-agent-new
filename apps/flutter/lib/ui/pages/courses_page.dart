@@ -84,26 +84,60 @@ class _CoursesPageState extends CampusPageState<CoursesPage>
     }
   }
 
+  /// 学期总览辅助栏是否已收起。收起后只在右缘保留一条窄栏用于重新展开，
+  /// 把横向空间让给课程表网格。
+  bool overviewCollapsed = false;
+
   @override
-  Widget sidePanel(double width) => SizedBox(
-    width: width >= 1200 ? 288 : 260,
+  Widget sidePanel(double width) => overviewCollapsed
+      ? _collapsedOverviewRail()
+      : SizedBox(
+          width: width >= 1200 ? 288 : 260,
+          child: Container(
+            decoration: BoxDecoration(
+              color: paperCard.withValues(alpha: .62),
+              border: Border(
+                left: BorderSide(color: ink.withValues(alpha: .15)),
+              ),
+            ),
+            // 右侧只留 6，余下的 14 交给滚动视图内部留白：桌面端 Flutter 会给
+            // 滚动视图叠加 Scrollbar，而它固定画在滚动视图右缘，只有让内容
+            // 内缩才能避免标题行的刷新/收起按钮被压在滚动条下面。
+            padding: const EdgeInsets.fromLTRB(20, 28, 6, 100),
+            child: RefreshIndicator(
+              color: blue,
+              backgroundColor: paperCard,
+              onRefresh: refreshOverview,
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.only(right: 14),
+                child: overviewPanelContent(
+                  onCollapse: () => setState(() => overviewCollapsed = true),
+                ),
+              ),
+            ),
+          ),
+        );
+
+  /// 收起状态下的窄栏：只保留展开按钮。
+  Widget _collapsedOverviewRail() => SizedBox(
+    width: 44,
     child: Container(
       decoration: BoxDecoration(
         color: paperCard.withValues(alpha: .62),
         border: Border(left: BorderSide(color: ink.withValues(alpha: .15))),
       ),
-      padding: const EdgeInsets.fromLTRB(20, 28, 20, 100),
-      child: RefreshIndicator(
-        color: blue,
-        backgroundColor: paperCard,
-        onRefresh: refreshOverview,
-        child: ScrollConfiguration(
-          behavior: const NoScrollbarScrollBehavior(),
-          child: SingleChildScrollView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            child: overviewPanelContent(),
+      child: Column(
+        children: [
+          const SizedBox(height: 26),
+          IconButton(
+            tooltip: '展开学期总览',
+            onPressed: () => setState(() => overviewCollapsed = false),
+            icon: const Icon(Icons.chevron_left, size: 20, color: ink),
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            padding: EdgeInsets.zero,
           ),
-        ),
+        ],
       ),
     ),
   );

@@ -171,6 +171,18 @@ class _SettingsPageState extends State<SettingsPage> {
     if (mounted) setState(() {});
   }
 
+  Future<void> changeDownloadDir() async {
+    final picked = await FilePicker.getDirectoryPath();
+    if (picked == null || picked == widget.services.files.root.path) return;
+    await widget.services.applyDownloadDirectory(picked);
+    if (mounted) setState(() {});
+  }
+
+  Future<void> resetDownloadDir() async {
+    await widget.services.applyDownloadDirectory(null);
+    if (mounted) setState(() {});
+  }
+
   Json providerDraft() {
     final old = providers.isEmpty ? <String, dynamic>{} : providers[selected];
     return {
@@ -731,6 +743,36 @@ class _SettingsPageState extends State<SettingsPage> {
                     ),
                   ],
                 ),
+                const SizedBox(height: 20),
+                const Divider(height: 1),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text('隐藏绩点', style: TextStyle(fontSize: 14)),
+                    ),
+                    Switch(
+                      value: app['hideGpa'] == true,
+                      onChanged: busy
+                          ? null
+                          : (value) => perform(() async {
+                              app = {...app, 'hideGpa': value};
+                              await widget.services.db.put(
+                                'settings',
+                                'app',
+                                app,
+                              );
+                            }),
+                    ),
+                  ],
+                ),
+                Text(
+                  '开启后工作台「学业成绩」卡的绩点与均分显示为 *，辅助栏与课程表内仍正常显示。',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: ink.withValues(alpha: .6),
+                  ),
+                ),
               ],
             ],
           ),
@@ -744,6 +786,33 @@ class _SettingsPageState extends State<SettingsPage> {
               const Text(
                 '备份不含密码、API Key、Cookie 和待确认操作。可用于 Windows 与 Android 之间迁移数据。',
               ),
+              const SizedBox(height: 16),
+              const Text(
+                '下载保存位置',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                widget.services.files.root.path,
+                style: TextStyle(fontSize: 11, color: ink.withValues(alpha: .7)),
+              ),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: [
+                  OutlinedButton(
+                    onPressed: busy ? null : () => perform(changeDownloadDir),
+                    child: const Text('更改下载目录'),
+                  ),
+                  OutlinedButton(
+                    onPressed: busy ? null : () => perform(resetDownloadDir),
+                    child: const Text('恢复默认'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 20),
+              const Divider(height: 1),
               const SizedBox(height: 16),
               Wrap(
                 spacing: 12,
