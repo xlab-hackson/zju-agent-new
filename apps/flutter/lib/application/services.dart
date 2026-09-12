@@ -5,7 +5,7 @@ import 'package:path_provider/path_provider.dart';
 import '../data/database.dart';
 import '../data/credentials.dart';
 import '../data/campus_session.dart';
-import '../domain/page_context.dart';
+import '../domain/models.dart';
 import 'agent.dart';
 import 'campus.dart';
 import 'files.dart';
@@ -56,9 +56,26 @@ class AppServices {
     final db = AgentDatabase(File(p.join(support.path, 'agent.db'))),
         secrets = SecureSecrets();
     final campus = CampusService(CampusSession(secrets), db);
-    final dir = Directory(p.join(support.path, 'downloads'));
-    await dir.create(recursive: true);
-    final files = FileService(campus, dir), guide = await GuideIndex.load();
+    final defaultDir = Directory(p.join(support.path, 'downloads'));
+    await defaultDir.create(recursive: true);
+
+    Directory initialDir = defaultDir;
+    try {
+      final settings = await db.get('settings', 'app');
+      final savedPath = text(settings ?? {}, 'downloadDirectory').trim();
+      if (savedPath.isNotEmpty) {
+        final customDir = Directory(p.normalize(savedPath));
+        if (!customDir.existsSync()) {
+          customDir.createSync(recursive: true);
+        }
+        initialDir = customDir;
+      }
+    } catch (_) {
+      initialDir = defaultDir;
+    }
+
+    final files = FileService(campus, initialDir, defaultRoot: defaultDir),
+        guide = await GuideIndex.load();
     // Never replay interrupted downloads or confirmations after process death.
     for (final c in await db.list('confirmations')) {
       if (c['status'] == 'consumed') {

@@ -40,13 +40,45 @@ String confinedPath(String root, String relative) {
 }
 
 class FileService {
-  FileService(this.campus, this.root);
+  FileService(this.campus, Directory initialRoot, {Directory? defaultRoot})
+      : _root = initialRoot,
+        _defaultRoot = defaultRoot ?? initialRoot;
+
   final CampusService campus;
-  final Directory root;
+  Directory _root;
+  final Directory _defaultRoot;
   final _activeDownloadsByKey = <String, _ActiveDownload>{};
   final _activeDownloadsById = <String, _ActiveDownload>{};
   final _reservedPaths = <String>{};
   AgentDatabase get db => campus.db;
+
+  Directory get root => _root;
+  Directory get defaultRoot => _defaultRoot;
+  bool get isCustomDirectory =>
+      p.normalize(_root.path) != p.normalize(_defaultRoot.path);
+
+  Future<void> setDownloadDirectory(String? newPath) async {
+    final trimmed = newPath?.trim() ?? '';
+    final defaultNormalized = p.normalize(_defaultRoot.path);
+    if (trimmed.isEmpty || p.normalize(trimmed) == defaultNormalized) {
+      _root = _defaultRoot;
+      final current = await db.get('settings', 'app') ?? {};
+      final updated = Map<String, dynamic>.from(current)
+        ..remove('downloadDirectory');
+      await db.put('settings', 'app', updated);
+      return;
+    }
+
+    final targetDir = Directory(p.normalize(trimmed));
+    if (!targetDir.existsSync()) {
+      targetDir.createSync(recursive: true);
+    }
+    _root = targetDir;
+    final current = await db.get('settings', 'app') ?? {};
+    final updated = Map<String, dynamic>.from(current)
+      ..['downloadDirectory'] = targetDir.path;
+    await db.put('settings', 'app', updated);
+  }
 
   Future<Json> download(Json input) {
     for (final key in ['fileId', 'fileName', 'courseId']) {
@@ -95,6 +127,7 @@ class FileService {
       'id': id,
       'fileName': name,
       'relativePath': relative,
+      'downloadDir': root.path,
       'status': 'downloading',
       'courseId': courseId,
       'courseName': courseName,
@@ -178,17 +211,50 @@ class FileService {
   }
 
   Future<File> file(Json record) async {
-    final candidate = File(
-      confinedPath(root.path, text(record, 'relativePath')),
-    );
-    if (!await candidate.exists()) {
-      throw const AppError('FILE_NOT_FOUND', '文件已被移除。');
+    final relative = text(record, 'relativePath');
+    final recordedDir = text(record, 'downloadDir').trim();
+
+    // 1. Try recorded directory if available
+    if (recordedDir.isNotEmpty) {
+      try {
+        final candidate = File(confinedPath(recordedDir, relative));
+        if (await candidate.exists()) {
+          final real = await candidate.resolveSymbolicLinks();
+          if (p.isWithin(
+            await Directory(recordedDir).resolveSymbolicLinks(),
+            real,
+          )) {
+            return candidate;
+          }
+        }
+      } catch (_) {}
     }
-    final real = await candidate.resolveSymbolicLinks();
-    if (!p.isWithin(await root.resolveSymbolicLinks(), real)) {
-      throw const AppError('FILE_NOT_FOUND', '文件路径非法。');
+
+    // 2. Try current root
+    try {
+      final candidate = File(confinedPath(root.path, relative));
+      if (await candidate.exists()) {
+        final real = await candidate.resolveSymbolicLinks();
+        if (p.isWithin(await root.resolveSymbolicLinks(), real)) {
+          return candidate;
+        }
+      }
+    } catch (_) {}
+
+    // 3. Try default root if different from root
+    if (p.normalize(defaultRoot.path) != p.normalize(root.path)) {
+      try {
+        final fallback = File(confinedPath(defaultRoot.path, relative));
+        if (await fallback.exists()) {
+          final real = await fallback.resolveSymbolicLinks();
+          if (p.isWithin(await defaultRoot.resolveSymbolicLinks(), real)) {
+            return fallback;
+          }
+        }
+      } catch (_) {}
     }
-    return candidate;
+
+    throw const AppError('FILE_NOT_FOUND', '文件已被移除。');
   }
 
   Future<void> delete(Json record, {bool purge = false}) async {

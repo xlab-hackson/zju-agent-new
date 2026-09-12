@@ -1,9 +1,9 @@
 import 'dart:convert';
-
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:open_filex/open_filex.dart';
 import '../application/services.dart';
 
 import '../application/llm.dart';
@@ -779,6 +779,111 @@ class _SettingsPageState extends State<SettingsPage> {
                           }),
                     child: const Text('导入备份'),
                   ),
+                ],
+              ),
+              const SizedBox(height: 20),
+              const Divider(height: 1),
+              const SizedBox(height: 16),
+              const Text(
+                '下载保存目录',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 6),
+              const Text('课件与课程资料下载保存至此目录。各课程以课程名作为子文件夹分类存放。'),
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: paper,
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: ink.withAlpha(30)),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        widget.services.files.root.path,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontFamily: 'monospace',
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (widget.services.files.isCustomDirectory)
+                      Container(
+                        margin: const EdgeInsets.only(left: 8),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: gold.withAlpha(25),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(
+                            color: gold.withAlpha(120),
+                            width: 0.8,
+                          ),
+                        ),
+                        child: const Text(
+                          '自定义',
+                          style: TextStyle(fontSize: 10, color: gold),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: busy
+                        ? null
+                        : () => perform(() async {
+                            final dir = widget.services.files.root;
+                            if (!await dir.exists()) {
+                              await dir.create(recursive: true);
+                            }
+                            await OpenFilex.open(dir.path);
+                          }),
+                    icon: const Icon(Icons.folder_open_outlined, size: 16),
+                    label: const Text('打开目录'),
+                  ),
+                  FilledButton.icon(
+                    onPressed: busy
+                        ? null
+                        : () => perform(() async {
+                            final currentPath = widget.services.files.root.path;
+                            final picked = await FilePicker.getDirectoryPath(
+                              dialogTitle: '选择下载保存目录',
+                              initialDirectory: currentPath,
+                            );
+                            if (picked != null && picked.trim().isNotEmpty) {
+                              await widget.services.files.setDownloadDirectory(
+                                picked.trim(),
+                              );
+                              await load();
+                            }
+                          }),
+                    icon: const Icon(Icons.drive_file_move_outlined, size: 16),
+                    label: const Text('更改目录'),
+                    style: FilledButton.styleFrom(backgroundColor: blue),
+                  ),
+                  if (widget.services.files.isCustomDirectory)
+                    TextButton(
+                      onPressed: busy
+                          ? null
+                          : () => perform(() async {
+                              await widget.services.files.setDownloadDirectory(
+                                null,
+                              );
+                              await load();
+                            }),
+                      style: TextButton.styleFrom(foregroundColor: seal),
+                      child: const Text('恢复默认'),
+                    ),
                 ],
               ),
             ],
