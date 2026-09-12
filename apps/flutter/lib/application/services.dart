@@ -144,21 +144,10 @@ class AppServices {
 
   /// 切换下载保存位置并持久化；传 null 或空串表示恢复默认。
   ///
-  /// 返回切换后的目录。已有下载记录保存的是相对旧根目录的路径，不会跟着
-  /// 搬家，会因此在下载页显示为「已被移除」。
+  /// 与下载页共用 FileService 的配置逻辑和 downloadDirectory 设置字段。
+  /// 已有文件保留在原位置，仍可通过下载记录中的目录查找。
   Future<Directory> applyDownloadDirectory(String? path) async {
-    final settings = {...await db.get('settings', 'app') ?? <String, dynamic>{}};
-    final wanted = path?.trim() ?? '';
-    if (wanted.isEmpty) {
-      settings.remove('downloadDir');
-    } else {
-      settings['downloadDir'] = wanted;
-    }
-    // 先落库再解析：downloadDirectory 依赖已经写入的设置。
-    await db.put('settings', 'app', settings);
-    final support = await getApplicationSupportDirectory();
-    final next = await downloadDirectory(db, support);
-    await files.moveRoot(next);
-    return next;
+    await files.setDownloadDirectory(path);
+    return files.root;
   }
 }

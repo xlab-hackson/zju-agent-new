@@ -13,6 +13,7 @@ import 'package:zju_campus_agent/application/campus.dart';
 import 'package:zju_campus_agent/application/files.dart';
 import 'package:zju_campus_agent/application/agent.dart';
 import 'package:zju_campus_agent/application/knowledge.dart';
+import 'package:zju_campus_agent/application/services.dart';
 
 class MemorySecrets implements SecretStore {
   final Map<String, Json> values = {};
@@ -248,6 +249,51 @@ void main() {
   );
 
   test(
+    'AppServices applies and resets the same download directory as FileService',
+    () async {
+      final files = backups.files;
+      final services = AppServices(
+        db,
+        MemorySecrets(),
+        files.campus,
+        files,
+        backups,
+        agent,
+      );
+      final customDir = Directory(confinedPath(root.path, 'custom'));
+      await db.put('settings', 'app', {'nickname': '测试'});
+      final oldFile = File(confinedPath(root.path, '课程/讲义.pdf'));
+      await oldFile.parent.create(recursive: true);
+      await oldFile.writeAsString('existing download');
+      final record = {
+        'relativePath': '课程/讲义.pdf',
+        'downloadDir': root.path,
+      };
+
+      final selected = await services.applyDownloadDirectory(
+        '  ${customDir.path}  ',
+      );
+      expect(selected.path, customDir.path);
+      expect(files.root.path, customDir.path);
+      expect(await customDir.exists(), isTrue);
+      expect(await db.get('settings', 'app'), {
+        'nickname': '测试',
+        'downloadDirectory': customDir.path,
+      });
+      expect((await files.file(record)).path, oldFile.path);
+
+      for (final reset in <String?>[null, '   ', files.defaultRoot.path]) {
+        await services.applyDownloadDirectory(customDir.path);
+        final restored = await services.applyDownloadDirectory(reset);
+        expect(restored.path, files.defaultRoot.path);
+        expect(files.isCustomDirectory, isFalse);
+        expect(await db.get('settings', 'app'), {'nickname': '测试'});
+        expect((await files.file(record)).path, oldFile.path);
+      }
+    },
+  );
+
+  test(
     'FileService file lookup checks recorded downloadDir and fallbacks',
     () async {
       final customDir = await Directory.systemTemp.createTemp('zju_custom_dl2_');
@@ -294,4 +340,3 @@ void main() {
     },
   );
 }
-

@@ -1,6 +1,6 @@
 # AGENTS.md — 项目导航与协作约定
 
-> 本文档按 2026-09-12 的实际代码状态维护，供后续编码助手快速定位当前实现、历史实现和验证方式。
+> 本文档按 2026-09-13 的实际代码状态维护，供后续编码助手快速定位当前实现、历史实现和验证方式。
 > 本仓库正在从 React/Electron 客户端迁移到 Flutter 客户端。涉及界面、交互或本地数据时，默认以 `apps/flutter` 为当前实现；除非用户明确要求，不要为了 Flutter 需求修改旧的 `apps/web`。
 
 ## 1. 项目概览
@@ -44,6 +44,10 @@ flutter test integration_test/native_login_test.dart -d windows --dart-define=VE
 ```
 
 Flutter 要求 Flutter >= 3.44、Dart >= 3.12。`pubspec.lock` 应提交。Windows 发布时必须保留完整的 `build/windows/x64/runner/Release`，包括 DLL 和 `data` 目录；本机需要 Visual Studio C++ Desktop workload 和 Windows SDK。
+
+- 合并代码或依赖声明变化后先执行 `flutter pub get`，再使用 `--no-pub` 检查。`domain/webvpn.dart` 使用 `pointycastle` 4.0.0；若声明和锁文件已有该包但仍无法解析，应刷新本机 `.dart_tool/package_config.json`，不要手工修改生成文件或删掉加密实现。
+- 服务字段或构造初始化发生变化后，旧实例可能在热重载中保留。出现 `FileService._root` 为 null 的类型错误时，先执行 Hot Restart（`flutter run` 终端按大写 `R`）或停止后重新启动；不要为旧内存状态加入空目录兜底。详见 [Flutter 开发排错](apps/flutter/README.md#开发排错)。
+- Windows 构建/原生测试遇到 `LNK1168` 无法写入 `zju_campus_agent.exe` 时，先检查是否有同一路径的客户端仍在运行；退出相应调试进程后重试，不要将 EXE 占用误判为 Dart 编译错误。
 
 ### 旧 Web/Electron/Node 实现
 
@@ -200,7 +204,10 @@ zju-agent-new/
 
 ## 6. Flutter 文件下载与备份
 
-- `application/files.dart` 使用本地 `downloads` 根目录，文件按课程建立子目录；文件名会清理非法字符，同名文件由系统式的 `file (1).ext` 处理。
+- `application/files.dart` 默认使用应用支持目录下的 `downloads`，支持在下载页和设置页选择自定义目录或恢复默认；文件按课程建立子目录，文件名清理非法字符，同名文件由系统式的 `file (1).ext` 处理。
+- 下载目录统一由 `FileService.setDownloadDirectory(String?)` 切换并持久化到 `settings/app.downloadDirectory`；`AppServices.applyDownloadDirectory` 委托该方法并返回 `files.root`。启动从同一字段恢复目录；null、空白或默认路径恢复 `files.defaultRoot` 并移除配置，保留其他应用设置。
+- `FileService` 没有 `moveRoot` 方法。`services.dart` 中读取 `settings/app.downloadDir`、回退系统下载目录的 `downloadDirectory()` 是遗留辅助函数，当前启动和切换链路均不使用；不要重新接入这套不一致的配置逻辑。
+- 切换目录不搬迁已有文件。下载记录用 `relativePath` 与记录级 `downloadDir` 定位文件，`FileService.file()` 依次查找记录目录、当前目录与默认目录。当前 `downloads_loader.dart` 的 `exists` 仍只检查当前根目录，可能把原目录中的文件标为已移除；这是尚未统一的页面状态边界，不能宣称旧文件在下载页的展示已完全修复。
 - 学在浙大文件下载始终使用上传 `id`，不能把 `reference_id` 当成下载端点的 id。Office 文件预览可使用 `officePdf=true` 获取 PDF。
 - 大文件下载先写入临时 `.part` 文件，完成后再原子改名；传输采用流式读取和背压，单文件上限 512 MB。删除前要取消对应活动流，不能让删除和重新下载争抢同一路径。
 - 下载操作不应阻塞页面上的其他按钮；下载页的预览、打开、删除和重新下载状态必须独立管理。批量下载应复用同一套并发/取消/错误处理逻辑。
@@ -274,7 +281,9 @@ zju-agent-new/
 
 当前测试覆盖依赖兼容性、领域模型/课表、LLM URL 和请求、登录 cookie、认证协议、错误展示、SQLite/存储、作业筛选过滤、课程详情 Tab 及作业展示、课程表表头自适应/解耦/导出、课程表桌面端Tab半行自适应排版与窄屏滑动、课程表去网格框线、移动端课表尺寸精简与三行最多八字截断、秋/冬小学期分段过滤切换、右侧总览栏两行以内Tab自适应切换、秋/冬学期精准识别、课程表/日程点按弹出详情抽屉、课程详情上课时间/教室/教师元数据行、课程总览教师标注、移动端日程紧凑排版、设置页折叠展开、页面感知上下文与 API 指引、学业快览卡片直达与辅助栏学业统计、缓存请求合并、跨页面缓存通知和更新时间回归等；原生测试覆盖 Windows 安全存储和 SQLite，另有真实登录手工测试。
 
-最近验证记录（2026-09-12）：页面拆分和旧入口删除后，`flutter test --no-pub` 为 105 项全通过，`flutter analyze --no-pub` 为 `No issues found!`。新增的 `test/feature_page_lifecycle_test.dart` 覆盖入口 key 不变时的路由切换、作业分类参数、首次/手动刷新、缓存广播、本地下载页和 1320/800/390px 下的七个功能页渲染。之后的课表解析、刷新结束状态、辅助弹层同步和旧数据提示修复按用户要求未再运行测试或分析，不能把这一检查点当作后续修复已经验证。
+最近验证记录（2026-09-13）：依赖恢复和下载目录调用修复后，`flutter pub get` 成功，`flutter test --no-pub` 全量 126 项通过，`flutter analyze --no-pub` 输出 `No issues found!`，三者退出码均为 0。包含 `test/webvpn_test.dart` 的链接/AES 回归和 `test/storage_test.dart` 新增的目录切换、恢复默认、配置保留与原目录文件查找回归。
+
+`flutter test integration_test/native_storage_test.dart -d windows --no-pub` 在链接阶段因正在运行的 Debug 客户端占用 EXE 而报 `LNK1168`，本次原生集成测试未完成。用户随后确认运行时问题已解决；这不等于原生集成测试或真实校园接口全量验收通过。
 
 每次修改 Flutter 业务代码，优先执行：
 
@@ -338,3 +347,10 @@ pnpm test
 - 页面和课程辅助栏刷新结束时显式更新状态；辅助弹层订阅 `overviewChanges`，同步数据 Future、学期、刷新状态和更新时间。
 - 工作台根据实际缓存依赖显示部分刷新失败提示。组合时间仍取最早的真实依赖时间，失败回退不推进成功时间。
 - 此阶段按用户要求未再运行测试、分析或手工验收；第 12.3 节的通过记录仅覆盖此前的页面拆分和旧入口删除。
+
+### 12.5 2026-09-13 编译修复与运行状态恢复
+
+- `pointycastle` 已在 `pubspec.yaml` 和 `pubspec.lock` 中声明；执行 `flutter pub get` 补齐本机包解析配置，解决 WebVPN 的包缺失及 `AESEngine` / `KeyParameter` 连带编译错误，未修改依赖版本或锁文件。
+- 修复合并后 `AppServices.applyDownloadDirectory` 对不存在的 `moveRoot` 的调用，改为委托 `FileService.setDownloadDirectory`，统一使用 `downloadDirectory` 配置字段和当前默认目录。
+- 针对字段改动后热重载保留旧 `FileService` 实例导致的 `_root` 空值异常，说明 Hot Restart/重新启动处理方式；用户反馈问题已解决，无需修改非空目录类型。
+- 自动检查与原生测试限制见第 11 节；历史 100/105 项检查点保留为阶段记录，当前最新全量普通测试为 126 项通过。

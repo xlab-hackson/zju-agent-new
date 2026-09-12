@@ -24,7 +24,7 @@
 - 从教务网读取课表、考试、成绩和全历史选课信息；首页学业快览与课程总览共用教务网课程聚合结果，统一计算课程数、学分、成绩和绩点。
 - 从学在浙大读取课程、课件、作业和测验，并负责课程建课状态及资料/作业关联，不作为首页学业统计的课程底座。
 - 展示素质拓展平台与教务网通知，并在摘要展示前去除 HTML 标签。
-- 资料按课程分类保存到本地文件夹，支持预览、打开、删除和重新下载；批量下载当前通过 Agent 工具提供，下载页暂没有多选批量操作；大文件使用流式传输。
+- 资料按课程分类保存到本地文件夹，支持预览、打开、删除和重新下载；下载页和设置页支持更改保存目录、恢复默认，默认目录为应用支持目录下的 `downloads`。切换目录不搬迁已有文件；批量下载当前通过 Agent 工具提供，下载页暂没有多选批量操作；大文件使用流式传输。
 - 支持 OpenAI 兼容协议和 Anthropic 模型来源，可从 OpenAI 兼容 base URL 读取模型列表并检测当前模型可用性。
 - 本地 Agent 支持校园数据查询、知识库检索和需要确认的操作；普通聊天会话保存于本机，桌面挂件使用只读的一次性问答。Agent 会接收当前页面、学期、辅助栏和课程详情上下文，也可主动读取实时页面上下文。
 - 内置《浙江大学本科新生指引》知识库，按需检索相关段落，不把全文常驻放入提示词。
@@ -63,6 +63,8 @@ flutter test integration_test/native_storage_test.dart -d windows
 ```
 
 依赖兼容性测试位于 `apps/flutter/test/dependency_compatibility_test.dart`。
+
+合并代码后先执行 `flutter pub get`。若出现 `pointycastle` 无法解析，通常是本机包解析配置未同步；该依赖已在声明和锁文件中。服务字段变更后若热重载出现 `FileService._root` 空值异常，在 `flutter run` 终端按大写 `R` 执行 Hot Restart，或停止后重新启动。Windows 构建遇到 `LNK1168` 时检查同一路径的客户端是否仍在运行。详细说明见 [Flutter 开发排错](apps/flutter/README.md#开发排错)。
 
 ### 真实登录检查
 
@@ -158,7 +160,7 @@ lib/
 
 `archive` 3.6.1 和 `xml` 6.6.1 暂时保留，因为 `excel 4.0.6` 对它们有版本约束；`material_color_utilities` 和 `test_api` 的旧版本由当前 Flutter SDK 固定。不要用 `dependency_overrides` 强行跨越这些约束。Android release 当前仍使用 debug signing config，正式发布前需要补正式签名。
 
-最近验证记录（2026-09-12）：页面拆分和旧入口删除后，`flutter test --no-pub` 105 项全通过，`flutter analyze --no-pub` 输出 `No issues found!`。之后的课表解析、刷新结束状态、辅助弹层同步和旧数据提示修复按用户要求未再运行测试或分析；上述结果不代表这些后续修复已验证。更多细节见 [`apps/flutter/README.md`](apps/flutter/README.md)。
+最近验证记录（2026-09-13）：已修复下载目录切换对旧 `moveRoot` 接口的调用，并通过 `flutter pub get` 恢复 `pointycastle` 的本机解析配置。`flutter test --no-pub` 全量 126 项通过，`flutter analyze --no-pub` 输出 `No issues found!`，退出码均为 0。Windows 原生存储集成测试因运行中的 Debug 客户端占用 EXE（`LNK1168`）未完成；用户随后确认运行时问题已解决。更多细节见 [`apps/flutter/README.md`](apps/flutter/README.md)。
 
 ## 旧 Web/Electron/Node 实现
 

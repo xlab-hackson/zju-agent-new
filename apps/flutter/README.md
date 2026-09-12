@@ -27,10 +27,28 @@ Windows 发布时需要携带整个 `build/windows/x64/runner/Release` 目录，
 - 安全存储升级不使用 v10 已废弃的加密配置。Android 最低 API 24，由当前 Flutter 的 `minSdkVersion` 提供；Windows 使用 DPAPI。参见 [安全存储变更](https://pub.dev/packages/flutter_secure_storage/changelog)。
 - `archive` 3.6.1、`xml` 6.6.1 暂保留：Excel 4.0.6 对它们分别约束为 `^3.6.1` 和 `<7.0.0`。升级需另行迁移 Excel 库，不能通过 `dependency_overrides` 强行跨版本。
 - `material_color_utilities` 0.13.0 与 `test_api` 0.7.12 由当前 Flutter SDK 固定，随 SDK 更新处理。`flutter pub outdated` 仍显示这四项属于预期。
+- `pointycastle` 4.0.0 已声明并锁定，供 `domain/webvpn.dart` 构造 WebVPN 链接时进行 AES 加密。2026-09-13 的包解析修复只执行了 `flutter pub get`，未更改依赖版本或锁文件。
 
 依赖兼容测试在 `test/dependency_compatibility_test.dart`，覆盖 Markdown 表格及链接导航、保存取消与 Android content URI；原生安全存储和 SQLite 测试见 `integration_test/native_storage_test.dart`。
 
-最近验证记录（2026-09-12）：页面拆分和旧入口删除后，`flutter test --no-pub` 为 105 项全通过，`flutter analyze --no-pub` 输出 `No issues found!`。之后的课表解析、刷新结束状态、辅助弹层同步和旧数据提示修复按用户要求未再运行测试或分析，仍待后续验收。
+最近验证记录（2026-09-13）：`flutter pub get` 成功，`flutter test --no-pub` 全量 126 项通过，`flutter analyze --no-pub` 输出 `No issues found!`，三者退出码均为 0。覆盖 WebVPN 链接与 AES、设置页/下载页以及新增的 `AppServices` 下载目录切换、恢复默认、其他设置保留和原目录文件查找回归。
+
+本次 `flutter test integration_test/native_storage_test.dart -d windows --no-pub` 在链接阶段因运行中的 Debug 客户端占用 EXE 而报 `LNK1168`，未完成原生集成测试。用户随后确认运行时问题已解决；真实校园接口、全量手工验收和原生集成测试结果需分别记录。
+
+## 开发排错
+
+- **无法解析 `pointycastle` / 找不到 `AESEngine`、`KeyParameter`**：先在本目录运行 `flutter pub get`。即使 `pubspec.yaml` 和 `pubspec.lock` 已包含依赖，旧 `.dart_tool/package_config.json` 仍可能缺少映射；该文件由工具生成，不应手工编辑或提交。
+- **找不到 `FileService.moveRoot`**：当前接口是 `setDownloadDirectory(String?)`，`AppServices.applyDownloadDirectory` 已委托该接口。更改目录统一写入 `settings/app.downloadDirectory`，不要恢复旧的 `downloadDir` 设置写入路径。
+- **热重载后 `FileService._root` 报 `Null` 不是 `Directory`**：字段或构造初始化变动后，旧对象可能仍保留在内存中。在 `flutter run` 终端按大写 `R` 执行 Hot Restart，或停止调试后重新运行 `flutter run -d windows`。当前构造函数会初始化 `_root` 和 `_defaultRoot`；无需为旧实例加入空目录兜底。参见 [Flutter 热重载与状态保留](https://docs.flutter.dev/tools/hot-reload#previous-state-is-combined-with-new-code)。
+- **Windows 链接失败 `LNK1168`，无法写入 EXE**：检查是否仍在运行相同输出路径的客户端，包括托盘中的实例。退出该客户端及相应调试会话，再重新构建或运行原生测试。
+
+## 下载目录
+
+默认目录为 `getApplicationSupportDirectory()` 下的 `downloads`。下载页和设置页可更改目录或恢复默认；启动时读取 `settings/app.downloadDirectory`。`FileService.setDownloadDirectory` 负责创建自定义目录、更新当前根目录和保存配置，`AppServices.applyDownloadDirectory` 复用同一逻辑；null、空白或默认路径会移除自定义配置并恢复 `files.defaultRoot`。
+
+切换目录不会移动已有文件。下载记录中的 `relativePath` 与记录级 `downloadDir` 用于查找，`FileService.file()` 依次尝试记录目录、当前目录和默认目录。当前下载页 loader 的 `exists` 仅检查当前根目录，因此原目录中的文件仍可能被标为已移除；服务层查找回归通过不代表这一页面状态差异已修复。
+
+`services.dart` 中读取旧 `settings/app.downloadDir` 并回退系统下载目录的 `downloadDirectory()` 目前只由遗留测试引用，不参与实际启动和目录切换。
 
 ## 代码导航
 
