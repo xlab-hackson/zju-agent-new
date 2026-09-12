@@ -404,7 +404,7 @@ class _DashboardPageState extends CampusPageState<DashboardPage>
       ('本科生教务系统', 'university', 'http://jwbinfosys.zju.edu.cn'),
       ('CC98 论坛', 'comment-thread', 'https://www.cc98.org'),
       ('校网充值与查询', 'payment-card', 'https://myvpn.zju.edu.cn'),
-      ('图书馆座位预约', 'library-public', 'http://libsys.zju.edu.cn'),
+      ('图书馆座位预约', 'library-public', 'https://booking.lib.zju.edu.cn'),
       ('校务综合服务大厅', 'school-building', 'https://service.zju.edu.cn'),
       ('ETA 成绩分析', 'area-chart', null),
     ];
