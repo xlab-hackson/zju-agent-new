@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
+import 'dart:ui' show PointerDeviceKind;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
@@ -18,6 +20,8 @@ import 'avatar.dart';
 import 'theme.dart';
 
 const _dayNames = ['一', '二', '三', '四', '五', '六', '日'];
+String _weekdayName(int day) =>
+    (day >= 1 && day <= 7) ? _dayNames[day - 1] : '$day';
 
 Future<void> openExternal(String url) async {
   final uri = Uri.tryParse(url);
@@ -37,9 +41,15 @@ String? dataUpdatedLabel(String? raw) {
 }
 
 class FeaturePage extends StatefulWidget {
-  const FeaturePage({super.key, required this.services, required this.page});
+  const FeaturePage({
+    super.key,
+    required this.services,
+    required this.page,
+    this.initialAssignmentTab,
+  });
   final AppServices services;
   final String page;
+  final String? initialAssignmentTab;
 
   @override
   State<FeaturePage> createState() => _FeaturePageState();
@@ -59,6 +69,11 @@ class _FeaturePageState extends State<FeaturePage> {
   bool _refreshing = false;
   bool _refreshingTimetable = false;
   bool _refreshingOverview = false;
+  bool _loadingPageData = false;
+  bool _loadingOverviewData = false;
+  StreamSubscription<String>? _cacheSubscription;
+  Timer? _pageReloadTimer;
+  Timer? _overviewReloadTimer;
   final exportKey = GlobalKey();
   bool _exporting = false;
 
@@ -66,12 +81,56 @@ class _FeaturePageState extends State<FeaturePage> {
 
   bool get hasRightPanel => widget.page == '/courses';
 
+  void _syncPageContext({Json? activeCourse, String? courseTab}) {
+    final ctx = _buildPageContext(
+      activeCourse: activeCourse,
+      courseTab: courseTab,
+    );
+    s.updatePageContext(ctx);
+  }
+
+  PageContext _buildPageContext({Json? activeCourse, String? courseTab}) {
+    switch (widget.page) {
+      case '/courses':
+        return PageContext.courses(
+          timetableSemester: semester,
+          overviewSemester: overviewSemester,
+          activeCourse: activeCourse,
+          courseTab: courseTab,
+        );
+      case '/assignments':
+        return PageContext.assignments(
+          tab: assignmentTab,
+          urgentHours: urgentHours,
+        );
+      case '/exams':
+        return PageContext.exams(semester: semester);
+      case '/school-info':
+        return PageContext.schoolInfo(source: noticeSource);
+      case '/downloads':
+        return PageContext.downloads();
+      case '/classroom':
+        return PageContext.classroom();
+      default:
+        return PageContext.dashboard();
+    }
+  }
+
   @override
   void initState() {
     super.initState();
-    data = load(refresh: s.claimInitialRefresh(widget.page));
+    final initialTab =
+        widget.initialAssignmentTab ??
+        (s.targetAssignmentTab != 'all' ? s.targetAssignmentTab : null);
+    if (initialTab != null && initialTab.isNotEmpty) {
+      assignmentTab = initialTab;
+      s.targetAssignmentTab = 'all';
+    }
+    _syncPageContext();
+    _cacheSubscription = s.campus.cacheChanges.listen(_handleCacheChange);
+    data = _loadPageData(refresh: s.claimInitialRefresh(widget.page));
     if (widget.page == '/courses') {
-      overviewData = loadOverview(
+      overviewData = _loadOverviewData(
         refresh: s.claimInitialRefresh('/courses:panel'),
       );
     }
@@ -81,19 +140,145 @@ class _FeaturePageState extends State<FeaturePage> {
   }
 
   @override
+  void didUpdateWidget(FeaturePage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final targetTab =
+        widget.initialAssignmentTab ??
+        (s.targetAssignmentTab != 'all' ? s.targetAssignmentTab : null);
+    if (targetTab != null && targetTab.isNotEmpty) {
+      if (assignmentTab != targetTab) {
+        setState(() {
+          assignmentTab = targetTab;
+          s.targetAssignmentTab = 'all';
+        });
+        _syncPageContext();
+      }
+    }
+    if (oldWidget.page != widget.page) {
+      _syncPageContext();
+    }
+  }
+
+  @override
   void dispose() {
     ticker?.cancel();
+    _cacheSubscription?.cancel();
+    _pageReloadTimer?.cancel();
+    _overviewReloadTimer?.cancel();
     super.dispose();
   }
 
-  Future<void> refresh() async {
+  Future<Json> _loadPageData({bool refresh = false}) async {
+    _loadingPageData = true;
+    try {
+      return await load(refresh: refresh);
+    } finally {
+      _loadingPageData = false;
+    }
+  }
+
+  Future<Json> _loadOverviewData({bool refresh = false}) async {
+    _loadingOverviewData = true;
+    try {
+      return await loadCourseOverview(s, semester, refresh: refresh);
+    } finally {
+      _loadingOverviewData = false;
+    }
+  }
+
+  bool _mainPageUsesCache(String key) {
+    switch (widget.page) {
+      case '/':
+        return key == 'semesters' ||
+            key == 'courses' ||
+            key == 'grades:' ||
+            key == 'enrolled_courses:all' ||
+            key.startsWith('calendar:') ||
+            key.startsWith('timetable:') ||
+            key.startsWith('exams:') ||
+            key.startsWith('assignments:');
+      case '/courses':
+        return key == 'semesters' || key.startsWith('timetable:');
+      case '/assignments':
+        return key == 'courses' || key.startsWith('assignments:');
+      case '/exams':
+        return key == 'semesters' || key.startsWith('exams:');
+      case '/school-info':
+        return key.startsWith('notices:');
+      default:
+        return false;
+    }
+  }
+
+  bool _overviewUsesCache(String key) {
+    if (widget.page != '/' && widget.page != '/courses') return false;
+    return key == 'semesters' ||
+        key == 'courses' ||
+        key == 'grades:' ||
+        key == 'enrolled_courses:all' ||
+        key.startsWith('timetable:');
+  }
+
+  void _handleCacheChange(String key) {
+    if (!mounted) return;
+    if (!_loadingPageData && _mainPageUsesCache(key)) _schedulePageReload();
+    if (!_loadingOverviewData &&
+        overviewData != null &&
+        _overviewUsesCache(key)) {
+      _scheduleOverviewReload();
+    }
+  }
+
+  void _schedulePageReload() {
+    if (_pageReloadTimer != null) return;
+    _pageReloadTimer = Timer(const Duration(milliseconds: 120), () {
+      _pageReloadTimer = null;
+      unawaited(_reloadPageFromCache());
+    });
+  }
+
+  Future<void> _reloadPageFromCache() async {
+    if (!mounted || _loadingPageData) return;
+    final previous = data;
+    final next = _loadPageData();
+    setState(() => data = next);
+    try {
+      await next;
+    } catch (_) {
+      if (mounted && identical(data, next)) setState(() => data = previous);
+    }
+  }
+
+  void _scheduleOverviewReload() {
+    if (_overviewReloadTimer != null) return;
+    _overviewReloadTimer = Timer(const Duration(milliseconds: 120), () {
+      _overviewReloadTimer = null;
+      unawaited(_reloadOverviewFromCache());
+    });
+  }
+
+  Future<void> _reloadOverviewFromCache() async {
+    if (!mounted || _loadingOverviewData || overviewData == null) return;
+    final previous = overviewData!;
+    final next = _loadOverviewData();
+    if (mounted) setState(() => overviewData = next);
+    try {
+      await next;
+    } catch (_) {
+      if (mounted && identical(overviewData, next)) {
+        setState(() => overviewData = previous);
+      }
+    }
+  }
+
+  Future<void> refresh({bool force = true}) async {
     if (widget.page == '/courses') {
-      await refreshTimetable();
+      await refreshTimetable(force: force);
       return;
     }
     if (_refreshing) return;
     _refreshing = true;
-    final next = load(refresh: true);
+    final next = _loadPageData(refresh: force);
     if (mounted) {
       setState(() {
         data = next;
@@ -111,7 +296,7 @@ class _FeaturePageState extends State<FeaturePage> {
   Future<void> refreshTimetable({bool force = true}) async {
     if (_refreshingTimetable) return;
     _refreshingTimetable = true;
-    final next = load(refresh: force);
+    final next = _loadPageData(refresh: force);
     if (mounted) {
       setState(() {
         data = next;
@@ -142,7 +327,7 @@ class _FeaturePageState extends State<FeaturePage> {
   Future<void> refreshOverview() async {
     if (_refreshingOverview) return;
     _refreshingOverview = true;
-    final next = loadOverview(refresh: true);
+    final next = _loadOverviewData(refresh: true);
     if (mounted) {
       setState(() {
         overviewData = next;
@@ -157,20 +342,8 @@ class _FeaturePageState extends State<FeaturePage> {
     }
   }
 
-  Future<Json> loadOverview({bool refresh = false}) async {
-    final semesters = await s.campus.semesters(refresh: refresh);
-    final courses = await s.campus.courses(refresh: refresh);
-    return {
-      'semesters': semesters,
-      'courses': courses,
-      '_updatedAt': await _updatedAt(
-        cacheKeys: [
-          'semesters',
-          'courses',
-        ],
-      ),
-    };
-  }
+  Future<Json> loadOverview({bool refresh = false}) =>
+      _loadOverviewData(refresh: refresh);
 
   Future<Json> load({bool refresh = false}) async {
     switch (widget.page) {
@@ -184,21 +357,23 @@ class _FeaturePageState extends State<FeaturePage> {
           'semesters': semesters,
           'timetable': timetable,
           '_updatedAt': await _updatedAt(
-            cacheKeys: [
-              'semesters',
-              'timetable:$semester',
-            ],
+            cacheKeys: ['semesters', 'timetable:$semester'],
           ),
         };
       case '/assignments':
+        final courseCandidates = await s.campus.courses(refresh: refresh);
         final items = await s.campus.assignments(
+          courseCandidates: courseCandidates,
           refresh: refresh,
         );
+        final assignmentCacheKeys = courseCandidates
+            .map((course) => text(course, 'id').trim())
+            .where((courseId) => courseId.isNotEmpty)
+            .map((courseId) => 'assignments:$courseId');
         return {
           'items': items,
           '_updatedAt': await _updatedAt(
-            cacheKeys: ['courses'],
-            cachePrefixes: ['assignments:'],
+            cacheKeys: ['courses', ...assignmentCacheKeys],
           ),
         };
       case '/exams':
@@ -242,36 +417,76 @@ class _FeaturePageState extends State<FeaturePage> {
               : 'missing',
           'hasModel': rows(providers?['items'] ?? []).isNotEmpty,
         };
-        var forceRefresh = refresh;
-        for (final entry in <String, Future<Object?> Function(bool)>{
-          'schedule': (force) => s.campus.upcoming(refresh: force),
-          'timetable': (force) async => (await s.campus.timetable(
+        Json? upcomingData;
+        try {
+          // upcoming() already loads the calendar, timetable, exams and
+          // assignments needed by the dashboard. Keep this result as the
+          // shared source for the cards instead of fetching each dataset
+          // again below.
+          upcomingData = await s.campus.upcoming(refresh: refresh);
+          result['schedule'] = upcomingData;
+          result['assignments'] = rows(upcomingData['assignments'] ?? []);
+          result['exams'] = rows(upcomingData['currentExams'] ?? []);
+        } on AppError catch (e) {
+          result['scheduleError'] = e.message;
+        }
+
+        try {
+          final schedule = upcomingData;
+          result['courseOverview'] = await loadCourseOverview(
+            s,
             semester,
-            refresh: force,
-          )).map((entry) => entry.toJson()).toList(),
-          'assignments': (force) =>
-              s.campus.assignments(refresh: force),
-          'courses': (force) =>
-              s.campus.courses(semesterId: semester, refresh: force),
-          'exams': (force) => s.campus.exams(semester, refresh: force),
-        }.entries) {
-          try {
-            result[entry.key] = await entry.value(forceRefresh);
-            // upcoming() already refreshes the current semester's timetable,
-            // exams, assignments and courses. Avoid downloading the same
-            // datasets again for the dashboard KPI cards.
-            forceRefresh = false;
-          } on AppError catch (e) {
-            result['${entry.key}Error'] = e.message;
-          }
+            refresh: refresh,
+            semestersOverride: schedule == null
+                ? null
+                : rows(schedule['semesters'] ?? []),
+            rawCoursesOverride: schedule == null
+                ? null
+                : rows(schedule['courses'] ?? []),
+            timetableOverride: schedule == null
+                ? null
+                : rows(
+                    schedule['currentTimetable'] ?? [],
+                  ).map(TimetableEntry.fromJson).toList(),
+          );
+        } on AppError catch (e) {
+          result['courseOverviewError'] = e.message;
         }
         result['campusStatus'] = hasCampusCredential
             ? s.campus.session.authStatus
             : 'missing';
+        final relevantSemesters = <String>{semester};
+        final semesterIds = upcomingData?['semesterIds'];
+        if (semesterIds is List) {
+          relevantSemesters.addAll(
+            semesterIds
+                .map((value) => '$value'.trim())
+                .where((value) => value.isNotEmpty),
+          );
+        }
+        final assignmentCacheKeys = <String>{};
+        final assignmentCourseIds = upcomingData?['assignmentCourseIds'];
+        if (assignmentCourseIds is List) {
+          assignmentCacheKeys.addAll(
+            assignmentCourseIds
+                .map((value) => '$value'.trim())
+                .where((value) => value.isNotEmpty)
+                .map((value) => 'assignments:$value'),
+          );
+        }
         result['_updatedAt'] = await _updatedAt(
-          cacheKeys: ['courses', 'timetable:$semester', 'exams:$semester'],
-          cachePrefixes: ['assignments:'],
-          calendarKeys: [semester],
+          cacheKeys: [
+            'semesters',
+            'courses',
+            'enrolled_courses:all',
+            'grades:',
+            ...assignmentCacheKeys,
+            for (final id in relevantSemesters) ...[
+              'timetable:$id',
+              'exams:$id',
+            ],
+          ],
+          calendarKeys: relevantSemesters,
         );
         return result;
     }
@@ -435,6 +650,7 @@ class _FeaturePageState extends State<FeaturePage> {
                 refreshing: _refreshingOverview,
                 onChanged: (value) {
                   setState(() => overviewSemester = value);
+                  _syncPageContext();
                   onPanelChanged?.call();
                 },
                 onRefresh: () {
@@ -449,6 +665,7 @@ class _FeaturePageState extends State<FeaturePage> {
                 hours: urgentHours,
                 onHoursChanged: (value) {
                   setState(() => urgentHours = value);
+                  _syncPageContext();
                   onPanelChanged?.call();
                 },
               );
@@ -485,6 +702,114 @@ class _FeaturePageState extends State<FeaturePage> {
     ),
   );
 
+  Future<void> _openCourseOverviewSheet({String? initialSemester}) {
+    if (initialSemester != null) {
+      overviewSemester = initialSemester;
+    } else if (overviewSemester.isEmpty) {
+      overviewSemester = semester;
+    }
+    return showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: paperCard,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) => SizedBox(
+          height: MediaQuery.sizeOf(ctx).height * .85,
+          child: RefreshIndicator(
+            color: blue,
+            backgroundColor: paperCard,
+            onRefresh: () async {
+              await refreshOverview();
+              setSheetState(() {});
+            },
+            child: SingleChildScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
+              child: FutureBuilder<Json>(
+                future: overviewData ??= loadOverview(
+                  refresh: s.claimInitialRefresh('/courses:panel'),
+                ),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting &&
+                      !snapshot.hasData) {
+                    return const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(32),
+                        child: CircularProgressIndicator(color: blue),
+                      ),
+                    );
+                  }
+                  if (snapshot.hasError) {
+                    return Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.cloud_off, color: seal),
+                            const SizedBox(height: 8),
+                            Text(
+                              snapshot.error is AppError
+                                  ? (snapshot.error as AppError).message
+                                  : '课程总览加载失败',
+                              style: const TextStyle(color: ink, fontSize: 12),
+                            ),
+                            const SizedBox(height: 8),
+                            OutlinedButton(
+                              onPressed: () {
+                                refreshOverview();
+                                setSheetState(() {});
+                              },
+                              child: const Text(
+                                '重试',
+                                style: TextStyle(fontSize: 12),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }
+                  if (!snapshot.hasData) return const SizedBox.shrink();
+                  final d = snapshot.data!;
+                  final choices = semesterChoices(rows(d['semesters'] ?? []));
+                  var curSelected = overviewSemester;
+                  if (!choices.any((c) => c.id == curSelected)) {
+                    final activeChoice = choices.firstWhere(
+                      (c) => c.id == semester,
+                      orElse: () => choices.first,
+                    );
+                    curSelected = activeChoice.id;
+                    overviewSemester = curSelected;
+                  }
+                  return CourseRightPanel(
+                    data: d,
+                    selected: curSelected,
+                    refreshing: _refreshingOverview,
+                    onChanged: (value) {
+                      setState(() => overviewSemester = value);
+                      _syncPageContext();
+                      setSheetState(() {});
+                    },
+                    onRefresh: () {
+                      refreshOverview();
+                      setSheetState(() {});
+                    },
+                    onSelect: (course) {
+                      Navigator.of(ctx).pop();
+                      courseDetail(course);
+                    },
+                  );
+                },
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _mainContent(AsyncSnapshot<Json> snapshot, {required bool wide}) {
     if (widget.page == '/') {
       return Column(
@@ -511,12 +836,14 @@ class _FeaturePageState extends State<FeaturePage> {
             includeAll: false,
           )
         : widget.page == '/exams'
-            ? semesterChoices(rows(snapshot.data?['semesters'] ?? []))
-            : const <SemesterChoice>[];
+        ? semesterChoices(rows(snapshot.data?['semesters'] ?? []))
+        : const <SemesterChoice>[];
     if (widget.page == '/courses' && choices.isNotEmpty && semester == 'all') {
       semester = choices.first.id;
     }
-    final isBusy = widget.page == '/courses' ? _refreshingTimetable : _refreshing;
+    final isBusy = widget.page == '/courses'
+        ? _refreshingTimetable
+        : _refreshing;
     final body = <Widget>[
       PageHead(
         title: title,
@@ -549,7 +876,10 @@ class _FeaturePageState extends State<FeaturePage> {
           child: AssignmentRightPanel(
             data: snapshot.data!,
             hours: urgentHours,
-            onHoursChanged: (value) => setState(() => urgentHours = value),
+            onHoursChanged: (value) {
+              setState(() => urgentHours = value);
+              _syncPageContext();
+            },
           ),
         ),
       _asyncBody(snapshot, wide: wide, choices: choices),
@@ -562,32 +892,72 @@ class _FeaturePageState extends State<FeaturePage> {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: body);
   }
 
-  Widget _semesterPicker(List<SemesterChoice> choices) => Padding(
-    padding: const EdgeInsets.only(bottom: 16),
-    child: DropdownButtonFormField<String>(
-      isExpanded: true,
-      value: choices.any((choice) => choice.id == semester)
-          ? semester
-          : (choices.isEmpty ? null : choices.first.id),
-      decoration: const InputDecoration(labelText: '学期'),
-      items: [
-        for (final choice in choices)
-          DropdownMenuItem(
-            value: choice.id,
-            child: Text(
-              choice.name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-      ],
-      onChanged: (value) {
-        if (value == null) return;
-        semester = value;
-        refresh();
+  Widget _semesterPicker(List<SemesterChoice> choices) {
+    if (choices.isEmpty) return const SizedBox.shrink();
+    final activeId = choices.any((c) => c.id == semester)
+        ? semester
+        : choices.first.id;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          return Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final choice in choices)
+                _examSemesterTab(choice, isSelected: choice.id == activeId),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _examSemesterTab(SemesterChoice choice, {required bool isSelected}) {
+    return InkWell(
+      onTap: () {
+        if (choice.id != semester) {
+          setState(() => semester = choice.id);
+          _syncPageContext();
+          refresh(force: false);
+        }
       },
-    ),
-  );
+      borderRadius: BorderRadius.circular(16),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        height: 32,
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: isSelected ? blue : paperCard,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isSelected ? blue : ink.withValues(alpha: .2),
+            width: 1,
+          ),
+          boxShadow: isSelected
+              ? [
+                  BoxShadow(
+                    color: blue.withValues(alpha: .2),
+                    blurRadius: 4,
+                    offset: const Offset(0, 2),
+                  ),
+                ]
+              : null,
+        ),
+        child: Text(
+          choice.id == 'all' ? '全部学期' : choice.name,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+            color: isSelected ? paperCard : ink,
+          ),
+        ),
+      ),
+    );
+  }
 
   Widget _asyncBody(
     AsyncSnapshot<Json> snapshot, {
@@ -624,11 +994,7 @@ class _FeaturePageState extends State<FeaturePage> {
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
-      children: content(
-        snapshot.data ?? {},
-        wide: wide,
-        choices: choices,
-      ),
+      children: content(snapshot.data ?? {}, wide: wide, choices: choices),
     );
   }
 
@@ -683,11 +1049,13 @@ class _FeaturePageState extends State<FeaturePage> {
             setState(() {
               semester = id;
             });
+            _syncPageContext();
             refreshTimetable(force: false);
           },
           onExportPng: () => act(_exportTimetablePng),
           onExportXlsx: () => act(() => exportXlsx(entries, semester)),
           onRefresh: refreshTimetable,
+          onSelectCourse: _openTimetableCourse,
         ),
       ),
     ];
@@ -755,7 +1123,10 @@ class _FeaturePageState extends State<FeaturePage> {
                   label: Text('${tab.$2}  ${tab.$3}'),
                   selected: assignmentTab == tab.$1,
                   selectedColor: tab.$4.withValues(alpha: .16),
-                  onSelected: (_) => setState(() => assignmentTab = tab.$1),
+                  onSelected: (_) {
+                    setState(() => assignmentTab = tab.$1);
+                    _syncPageContext();
+                  },
                 ),
               ),
           ],
@@ -855,7 +1226,10 @@ class _FeaturePageState extends State<FeaturePage> {
               child: ChoiceChip(
                 label: Text(choice.$2),
                 selected: noticeSource == choice.$1,
-                onSelected: (_) => setState(() => noticeSource = choice.$1),
+                onSelected: (_) {
+                  setState(() => noticeSource = choice.$1);
+                  _syncPageContext();
+                },
               ),
             ),
         ],
@@ -1041,12 +1415,44 @@ class _FeaturePageState extends State<FeaturePage> {
           due <= now.millisecondsSinceEpoch + 48 * 3600 * 1000 &&
           due >= now.millisecondsSinceEpoch;
     }).toList();
-    final courses = rows(d['courses'] ?? []);
-    final timetable = rows(
-      d['timetable'] ?? [],
-    ).map(TimetableEntry.fromJson).toList();
-    final courseCount = timetableCourseCount(timetable);
     final exams = rows(d['exams'] ?? []);
+    final courseOverview = object(d['courseOverview'] ?? {});
+    final overviewSemesters = rows(courseOverview['semesters'] ?? []);
+    final overviewCourses = rows(courseOverview['courses'] ?? []);
+    final currentCourses = coursesForSemester(
+      overviewCourses,
+      overviewSemesters,
+      semester,
+    );
+    final allGrades = rows(courseOverview['grades'] ?? []);
+
+    final nowMs = now.millisecondsSinceEpoch;
+    final threshold = nowMs + urgentHours * 3600 * 1000;
+    final urgentAssignments = activeAssignments
+        .where(
+          (a) =>
+              !isSubmitted(a) &&
+              deadlineMs(a) != null &&
+              deadlineMs(a)! > nowMs &&
+              deadlineMs(a)! <= threshold,
+        )
+        .toList();
+    final relaxedAssignments = activeAssignments
+        .where(
+          (a) =>
+              !isSubmitted(a) &&
+              (deadlineMs(a) == null || deadlineMs(a)! > threshold),
+        )
+        .toList();
+    final submittedAssignments = activeAssignments.where(isSubmitted).toList();
+
+    final currentSemesterCredits = courseCredits(currentCourses);
+    final gradeStats = GradeStats.compute(
+      grades: allGrades,
+      currentSemester: '',
+      timetableCredits: currentSemesterCredits,
+    );
+
     final dateInfo = object(schedule['dateInfo'] ?? {});
     final name = text(settings, 'nickname').trim().isEmpty
         ? '浙大学子'
@@ -1088,9 +1494,13 @@ class _FeaturePageState extends State<FeaturePage> {
         _dashboardAssignments(assignments48h),
       ChapterHead(juan: '卷二', title: '学业快览', icon: 'area-chart'),
       _kpiRow(
-        courseCount > 0 ? courseCount : courses.length,
-        pending.length,
-        exams.length,
+        courses: currentCourses.length,
+        semesterCredits: gradeStats.semesterCredits,
+        exams: exams.length,
+        urgentCount: urgentAssignments.length,
+        relaxedCount: relaxedAssignments.length,
+        submittedCount: submittedAssignments.length,
+        gradeStats: gradeStats,
       ),
       ChapterHead(juan: '卷三', title: '校园百宝箱', icon: 'scroll'),
       _toolGrid(),
@@ -1236,6 +1646,7 @@ class _FeaturePageState extends State<FeaturePage> {
     }
     return LayoutBuilder(
       builder: (context, constraints) {
+        final isMobile = constraints.maxWidth < 600;
         final width = constraints.maxWidth >= 700
             ? (constraints.maxWidth - 14) / 2
             : constraints.maxWidth;
@@ -1244,16 +1655,40 @@ class _FeaturePageState extends State<FeaturePage> {
           runSpacing: 14,
           children: [
             for (final event in events)
-              SizedBox(width: width, child: _eventCard(event)),
+              SizedBox(
+                width: width,
+                child: _eventCard(event, isMobile: isMobile),
+              ),
           ],
         );
       },
     );
   }
 
-  Widget _eventCard(Json event) => Paper(child: _eventCardBody(event));
+  Widget _eventCard(Json event, {bool isMobile = false}) => Container(
+    margin: const EdgeInsets.only(bottom: 16),
+    decoration: BoxDecoration(
+      color: paperCard,
+      border: Border.all(color: ink.withValues(alpha: .14)),
+      borderRadius: BorderRadius.circular(3),
+      boxShadow: const [
+        BoxShadow(color: Color(0x110e1c38), offset: Offset(2, 3)),
+      ],
+    ),
+    child: Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => _openEventCourse(event),
+        borderRadius: BorderRadius.circular(3),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: _eventCardBody(event, isMobile: isMobile),
+        ),
+      ),
+    ),
+  );
 
-  Widget _eventCardBody(Json event) {
+  Widget _eventCardBody(Json event, {bool isMobile = false}) {
     final isExam = text(event, 'type') == 'exam',
         start = _eventDateTime(event, 'startTime'),
         end = _eventDateTime(event, 'endTime');
@@ -1286,6 +1721,82 @@ class _FeaturePageState extends State<FeaturePage> {
         : isExam
         ? seal
         : blue;
+
+    if (isMobile) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              InkTag(label: status, color: statusColor, dot: true),
+              const Spacer(),
+              Text(
+                '${text(event, 'date')} ${text(event, 'startTime')}',
+                style: const TextStyle(fontSize: 11, color: gold),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: Text(
+                  text(event, 'title', text(event, 'courseName')),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              if (start != null) ...[
+                const SizedBox(width: 8),
+                Text(
+                  formatHms(seconds),
+                  style: TextStyle(
+                    color: ongoing ? const Color(0xff2e7d32) : seal,
+                    fontSize: 17,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '${text(event, 'location')}  ${text(event, 'teacher')}',
+            style: const TextStyle(fontSize: 11, color: ink),
+          ),
+          if (ongoing) ...[
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                Text(
+                  '课堂进度 $progress%',
+                  style: const TextStyle(
+                    fontSize: 10,
+                    color: Color(0xff2e7d32),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: LinearProgressIndicator(
+                    value: progress / 100,
+                    minHeight: 4,
+                    color: const Color(0xff2e7d32),
+                    backgroundColor: ink.withValues(alpha: .1),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      );
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1371,7 +1882,7 @@ class _FeaturePageState extends State<FeaturePage> {
   }
 
   Widget _dashboardAssignments(List<Json> assignments) {
-    if (assignments.isEmpty)
+    if (assignments.isEmpty) {
       return Paper(
         child: const PageEmpty(
           icon: 'checklist-paper',
@@ -1379,6 +1890,7 @@ class _FeaturePageState extends State<FeaturePage> {
           description: '所有待办作业均在安全期内或已全部提交完毕。',
         ),
       );
+    }
     return LayoutBuilder(
       builder: (context, constraints) {
         final width = constraints.maxWidth >= 700
@@ -1396,7 +1908,15 @@ class _FeaturePageState extends State<FeaturePage> {
     );
   }
 
-  Widget _kpiRow(int courses, int assignments, int exams) => LayoutBuilder(
+  Widget _kpiRow({
+    required int courses,
+    required double semesterCredits,
+    required int exams,
+    required int urgentCount,
+    required int relaxedCount,
+    required int submittedCount,
+    required GradeStats gradeStats,
+  }) => LayoutBuilder(
     builder: (context, constraints) {
       final columns = constraints.maxWidth >= 900
           ? 4
@@ -1404,8 +1924,15 @@ class _FeaturePageState extends State<FeaturePage> {
           ? 2
           : 1;
       const gap = 6.0;
-      const cardHeight = 170.0;
+      const cardHeight = 136.0;
       final width = (constraints.maxWidth - gap * (columns - 1)) / columns;
+
+      final creditDisplay = semesterCredits > 0
+          ? (semesterCredits == semesterCredits.roundToDouble()
+                ? semesterCredits.toInt().toString()
+                : semesterCredits.toStringAsFixed(1))
+          : (courses > 0 ? '--' : '0');
+
       return Wrap(
         spacing: gap,
         runSpacing: gap,
@@ -1413,37 +1940,117 @@ class _FeaturePageState extends State<FeaturePage> {
           SizedBox(
             width: width,
             height: cardHeight,
-            child: Kpi(
-              label: '本学期课程',
-              value: '$courses',
-              unit: '门',
-              foot: '秋冬课表',
+            child: MultiMetricKpi(
+              label: '本学期学业',
               icon: 'book-open',
-              onTap: () => context.go('/courses'),
+              items: [
+                MultiMetricItem(
+                  value: '$courses',
+                  label: '课程数',
+                  tooltip: '弹出辅助栏课程总览',
+                  onTap: () {
+                    overviewSemester = semester;
+                    _openCourseOverviewSheet();
+                  },
+                ),
+                MultiMetricItem(
+                  value: creditDisplay,
+                  label: '学分数',
+                  tooltip: '本学期已选学分',
+                  onTap: null,
+                ),
+                MultiMetricItem(
+                  value: '$exams',
+                  label: '考试数',
+                  tooltip: '查看考试安排与考签',
+                  onTap: () => context.go('/exams'),
+                ),
+              ],
             ),
           ),
           SizedBox(
             width: width,
             height: cardHeight,
-            child: Kpi(
+            child: MultiMetricKpi(
               label: '待办作业',
-              value: '$assignments',
-              unit: '项待交',
-              foot: '截止一览',
               icon: 'checklist-paper',
-              onTap: () => context.go('/assignments'),
+              items: [
+                MultiMetricItem(
+                  value: '$urgentCount',
+                  label: '将截止',
+                  valueColor: urgentCount > 0 ? seal : null,
+                  tooltip: '48小时内截止的待办作业',
+                  onTap: () {
+                    s.targetAssignmentTab = 'urgent';
+                    context.go('/assignments?tab=urgent');
+                  },
+                ),
+                MultiMetricItem(
+                  value: '$relaxedCount',
+                  label: '还不急',
+                  tooltip: '安全期内的待办作业',
+                  onTap: () {
+                    s.targetAssignmentTab = 'relaxed';
+                    context.go('/assignments?tab=relaxed');
+                  },
+                ),
+                MultiMetricItem(
+                  value: '$submittedCount',
+                  label: '已提交',
+                  valueColor: const Color(0xff2e7d32),
+                  tooltip: '已提交完成的作业',
+                  onTap: () {
+                    s.targetAssignmentTab = 'submitted';
+                    context.go('/assignments?tab=submitted');
+                  },
+                ),
+              ],
             ),
           ),
           SizedBox(
             width: width,
             height: cardHeight,
-            child: Kpi(
-              label: '考试安排',
-              value: '$exams',
-              unit: '场待考',
-              foot: '考场考签',
-              icon: 'exam-paper',
-              onTap: () => context.go('/exams'),
+            child: MultiMetricKpi(
+              label: '学业成绩',
+              icon: 'area-chart',
+              items: [
+                MultiMetricItem(
+                  value: gradeStats.hasData && gradeStats.gpa > 0
+                      ? gradeStats.gpa.toStringAsFixed(2)
+                      : '--',
+                  label: '目前总绩点',
+                  tooltip: '五分制加权绩点 (GPA)，点击查看学业总览',
+                  onTap: () {
+                    overviewSemester = 'all';
+                    _openCourseOverviewSheet(initialSemester: 'all');
+                  },
+                ),
+                MultiMetricItem(
+                  value: gradeStats.hasData
+                      ? (gradeStats.totalEarnedCredits ==
+                                gradeStats.totalEarnedCredits.roundToDouble()
+                            ? gradeStats.totalEarnedCredits.toInt().toString()
+                            : gradeStats.totalEarnedCredits.toStringAsFixed(1))
+                      : '--',
+                  label: '获得总学分',
+                  tooltip: '累计获得有效学分，点击查看学业总览',
+                  onTap: () {
+                    overviewSemester = 'all';
+                    _openCourseOverviewSheet(initialSemester: 'all');
+                  },
+                ),
+                MultiMetricItem(
+                  value: gradeStats.hasData && gradeStats.averageScore > 0
+                      ? gradeStats.averageScore.toStringAsFixed(1)
+                      : '--',
+                  label: '百分制均分',
+                  tooltip: '百分制加权平均分，点击查看学业总览',
+                  onTap: () {
+                    overviewSemester = 'all';
+                    _openCourseOverviewSheet(initialSemester: 'all');
+                  },
+                ),
+              ],
             ),
           ),
           SizedBox(
@@ -1453,7 +2060,7 @@ class _FeaturePageState extends State<FeaturePage> {
               label: '下载中心',
               value: '本地文库',
               unit: '',
-              foot: '课件与资料',
+              foot: '',
               icon: 'folder',
               small: true,
               onTap: () => context.go('/downloads'),
@@ -1594,19 +2201,186 @@ class _FeaturePageState extends State<FeaturePage> {
     ),
   );
 
-  Future<void> courseDetail(Json c) => showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    useSafeArea: true,
-    backgroundColor: paperCard,
-    builder: (ctx) => CourseDetailSheet(
-      services: s,
-      course: c,
-      onDownload: downloadFile,
-      onPreview: previewFile,
-      onAssignmentDetail: assignmentDetail,
-    ),
-  );
+  Future<void> courseDetail(Json c) async {
+    final enriched = await _enrichCourse(c);
+    if (!mounted) return;
+    _syncPageContext(activeCourse: enriched, courseTab: 'materials');
+    try {
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        useSafeArea: true,
+        backgroundColor: paperCard,
+        builder: (ctx) => CourseDetailSheet(
+          services: s,
+          course: enriched,
+          onDownload: downloadFile,
+          onPreview: previewFile,
+          onAssignmentDetail: assignmentDetail,
+          onTabChanged: (tab) {
+            _syncPageContext(activeCourse: enriched, courseTab: tab);
+          },
+        ),
+      );
+    } finally {
+      _syncPageContext();
+    }
+  }
+
+  Future<Json> _enrichCourse(Json c) async {
+    final name = text(c, 'name');
+    final teacher = text(c, 'teacher');
+    final location = text(c, 'location');
+    final scheduleTime = text(c, 'scheduleTime');
+    if (teacher.isNotEmpty && location.isNotEmpty && scheduleTime.isNotEmpty) {
+      return c;
+    }
+
+    List<TimetableEntry> ttEntries = [];
+    try {
+      final d = await data;
+      if (d['timetable'] is List) {
+        ttEntries = rows(d['timetable']).map(TimetableEntry.fromJson).toList();
+      }
+    } catch (_) {}
+    if (ttEntries.isEmpty) {
+      try {
+        final cached = await s.db.get('cache', 'timetable:$semester');
+        if (cached != null) {
+          ttEntries = rows(
+            cached['items'],
+          ).map(TimetableEntry.fromJson).toList();
+        }
+      } catch (_) {}
+    }
+
+    final cleanName = name.replaceAll(RegExp(r'[（\(].*?[）\)]'), '').trim();
+    TimetableEntry? matched;
+    for (final e in ttEntries) {
+      if (e.courseName == name) {
+        matched = e;
+        break;
+      }
+    }
+    if (matched == null) {
+      for (final e in ttEntries) {
+        final eClean = e.courseName
+            .replaceAll(RegExp(r'[（\(].*?[）\)]'), '')
+            .trim();
+        if (eClean == cleanName ||
+            e.courseName.contains(cleanName) ||
+            cleanName.contains(e.courseName)) {
+          matched = e;
+          break;
+        }
+      }
+    }
+
+    if (matched == null) return c;
+
+    final weekText = matched.weeks.isNotEmpty
+        ? '${compressWeeks(matched.weeks)} 周'
+        : '';
+    final subText = matched.subSemester.isNotEmpty
+        ? '${matched.subSemester} '
+        : '';
+    final timeStr =
+        '周${_weekdayName(matched.weekday)} ${matched.startSection}-${matched.endSection}节 ($subText$weekText)';
+
+    return {
+      ...c,
+      if (teacher.isEmpty && matched.teacher.isNotEmpty)
+        'teacher': matched.teacher,
+      if (location.isEmpty && matched.location.isNotEmpty)
+        'location': matched.location,
+      if (scheduleTime.isEmpty) 'scheduleTime': timeStr,
+      if ((double.tryParse('${c['credit']}') ?? 0.0) <= 0 && matched.credit > 0)
+        'credit': matched.credit,
+    };
+  }
+
+  Future<void> _openTimetableCourse(TimetableEntry entry) async {
+    List<Json> coursesList = [];
+    try {
+      final od = await overviewData;
+      if (od != null) coursesList = rows(od['courses'] ?? []);
+    } catch (_) {}
+    if (coursesList.isEmpty) {
+      try {
+        final cached = await s.db.get('cache', 'courses');
+        if (cached != null) coursesList = rows(cached['items']);
+      } catch (_) {}
+    }
+    final matched = _findCourseByName(coursesList, entry.courseName);
+    final weekText = entry.weeks.isNotEmpty
+        ? '${compressWeeks(entry.weeks)} 周'
+        : '';
+    final subText = entry.subSemester.isNotEmpty ? '${entry.subSemester} ' : '';
+    final timeStr =
+        '周${_weekdayName(entry.weekday)} ${entry.startSection}-${entry.endSection}节 ($subText$weekText)';
+    final enriched = {
+      ...?matched,
+      'name': entry.courseName,
+      if (entry.teacher.isNotEmpty) 'teacher': entry.teacher,
+      if (entry.location.isNotEmpty) 'location': entry.location,
+      'scheduleTime': timeStr,
+      if (entry.credit > 0) 'credit': entry.credit,
+      if (matched == null || matched['learningZjuCreated'] == false)
+        'learningZjuCreated': false,
+    };
+    await courseDetail(enriched);
+  }
+
+  Future<void> _openEventCourse(Json event) async {
+    final name = text(event, 'title', text(event, 'courseName'));
+    if (name.isEmpty) return;
+    List<Json> coursesList = [];
+    try {
+      final d = await data;
+      coursesList = rows(d['courses'] ?? []);
+    } catch (_) {}
+    if (coursesList.isEmpty) {
+      try {
+        final cached = await s.db.get('cache', 'courses');
+        if (cached != null) coursesList = rows(cached['items']);
+      } catch (_) {}
+    }
+    final matched = _findCourseByName(coursesList, name);
+    final timeStr =
+        '${text(event, 'date')} ${text(event, 'startTime')}-${text(event, 'endTime')}';
+    final enriched = {
+      ...?matched,
+      'name': name,
+      if (text(event, 'teacher').isNotEmpty) 'teacher': text(event, 'teacher'),
+      if (text(event, 'location').isNotEmpty)
+        'location': text(event, 'location'),
+      'scheduleTime': timeStr,
+      if (matched == null || matched['learningZjuCreated'] == false)
+        'learningZjuCreated': false,
+    };
+    await courseDetail(enriched);
+  }
+
+  static Json? _findCourseByName(List<Json> courses, String name) {
+    if (name.isEmpty) return null;
+    final cleanName = name.replaceAll(RegExp(r'[（\(].*?[）\)]'), '').trim();
+    for (final c in courses) {
+      final cName = text(c, 'name');
+      if (cName == name) return c;
+    }
+    for (final c in courses) {
+      final cName = text(
+        c,
+        'name',
+      ).replaceAll(RegExp(r'[（\(].*?[）\)]'), '').trim();
+      if (cName == cleanName) return c;
+    }
+    for (final c in courses) {
+      final cName = text(c, 'name');
+      if (cName.contains(cleanName) || cleanName.contains(cName)) return c;
+    }
+    return null;
+  }
 
   Future<void> downloadFile(Json f) async {
     await act(() async {
@@ -1617,10 +2391,11 @@ class _FeaturePageState extends State<FeaturePage> {
         'courseName': text(f, 'courseName'),
         'officePdf': false,
       });
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(const SnackBar(content: Text('文件已保存，可在下载页打开。')));
+      }
     });
   }
 
@@ -1659,6 +2434,49 @@ class _FeaturePageState extends State<FeaturePage> {
   }
 }
 
+Set<String> matchingSemesterIds(List<Json> semesters, String selected) {
+  final ids = <String>{selected};
+  for (final semester in semesters) {
+    final rawId = text(semester, 'id').trim();
+    final normalizedName = semesterToId(text(semester, 'name'));
+    final normalizedId = semesterToId(rawId);
+    if (rawId == selected ||
+        normalizedName == selected ||
+        normalizedId == selected) {
+      if (rawId.isNotEmpty) ids.add(rawId);
+      if (normalizedName != null) ids.add(normalizedName);
+      if (normalizedId != null) ids.add(normalizedId);
+    }
+  }
+  final normalizedSelected = semesterToId(selected);
+  if (normalizedSelected != null) ids.add(normalizedSelected);
+  return ids;
+}
+
+List<Json> coursesForSemester(
+  List<Json> allCourses,
+  List<Json> semesters,
+  String selected,
+) {
+  if (selected == 'all') return allCourses;
+  final matchingIds = matchingSemesterIds(semesters, selected);
+  return allCourses.where((course) {
+    final semesterId = text(course, 'semesterId').trim();
+    final semester = text(course, 'semester').trim();
+    final normalizedSemesterId = semesterToId(semesterId) ?? semesterId;
+    final normalizedSemester = semesterToId(semester) ?? semester;
+    return matchingIds.contains(semesterId) ||
+        matchingIds.contains(semester) ||
+        matchingIds.contains(normalizedSemesterId) ||
+        matchingIds.contains(normalizedSemester);
+  }).toList();
+}
+
+double courseCredits(Iterable<Json> courses) => courses.fold<double>(
+  0,
+  (total, course) => total + (double.tryParse('${course['credit']}') ?? 0.0),
+);
+
 class CourseRightPanel extends StatelessWidget {
   const CourseRightPanel({
     super.key,
@@ -1689,22 +2507,28 @@ class CourseRightPanel extends StatelessWidget {
       }
     }
     final allCourses = rows(data['courses']);
-    final matchingIds = <String>{
-      selected,
-      for (final s in rows(data['semesters'] ?? []))
-        if (text(s, 'id') == selected ||
-            semesterToId(text(s, 'name')) == selected)
-          text(s, 'id'),
-    };
-    final courses = selected == 'all'
-        ? allCourses
-        : allCourses
-            .where((c) => matchingIds.contains(text(c, 'semesterId')))
-            .toList();
+    final allGrades = rows(data['grades'] ?? []);
+    final semesters = rows(data['semesters'] ?? []);
+    final matchingIds = matchingSemesterIds(semesters, selected);
+    final courses = coursesForSemester(allCourses, semesters, selected);
     final groups = <String, List<Json>>{};
     for (final c in courses) {
-      groups.putIfAbsent(text(c, 'semesterId'), () => []).add(c);
+      final key = text(c, 'semesterId').trim().isNotEmpty
+          ? text(c, 'semesterId').trim()
+          : text(c, 'semester').trim();
+      groups.putIfAbsent(key, () => []).add(c);
     }
+    final panelStats = _computePanelStats(
+      selected: selected,
+      courses: courses,
+      allCourses: allCourses,
+      allGrades: allGrades,
+      matchingIds: matchingIds,
+    );
+    final updatedLabel = dataUpdatedLabel(text(data, '_updatedAt'));
+    final sortedGroupEntries = groups.entries.toList()
+      ..sort((a, b) => b.key.compareTo(a.key));
+
     return SideSection(
       title: '学期总览',
       icon: 'scroll',
@@ -1743,34 +2567,23 @@ class CourseRightPanel extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 8),
-        DropdownButtonFormField<String>(
-          isExpanded: true,
-          value: choices.any((c) => c.id == selected)
-              ? selected
-              : (choices.isEmpty ? null : choices.first.id),
-          items: [
-            for (final c in choices)
-              DropdownMenuItem(
-                value: c.id,
-                child: Text(
-                  c.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-          ],
-          onChanged: choices.isEmpty
-              ? null
-              : (v) {
-                  if (v != null) onChanged(v);
-                },
-          decoration: const InputDecoration(isDense: true),
-        ),
-        const SizedBox(height: 18),
+        _buildSemesterTabs(context, choices),
+        if (updatedLabel != null) ...[
+          const SizedBox(height: 4),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Text(
+              updatedLabel,
+              style: TextStyle(fontSize: 10, color: ink.withValues(alpha: .5)),
+            ),
+          ),
+        ],
+        const SizedBox(height: 12),
+        _buildStatsCard(context, panelStats),
         if (groups.isEmpty)
-          const PageEmpty(title: '该学期暂无学在浙大课程')
+          const PageEmpty(title: '该学期暂无课程记录')
         else
-          for (final group in groups.entries) ...[
+          for (final group in sortedGroupEntries) ...[
             Text(
               '${semesterNames[group.key] ?? group.key}  ${group.value.length} 门',
               style: const TextStyle(
@@ -1780,49 +2593,559 @@ class CourseRightPanel extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 6),
-            for (final course in group.value)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 6),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton(
-                    onPressed: () => onSelect(course),
-                    style: OutlinedButton.styleFrom(
-                      alignment: Alignment.centerLeft,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 10,
-                      ),
-                      side: BorderSide(color: ink.withValues(alpha: .12)),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          text(course, 'name'),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        if (text(course, 'teachingClassName').isNotEmpty)
-                          Text(
-                            text(course, 'teachingClassName'),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 10, color: ink),
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
+            for (final course
+                in (group.value
+                  ..sort((a, b) => text(a, 'name').compareTo(text(b, 'name')))))
+              _buildCourseItem(course),
           ],
       ],
     );
   }
+
+  Widget _buildCourseItem(Json course) {
+    final teacher = text(course, 'teacher');
+    final creditVal = double.tryParse('${course['credit']}') ?? 0.0;
+    final score = text(course, 'score', text(course, 'original')).trim();
+    final gpa = text(course, 'gpa', text(course, 'fivePoint')).trim();
+    final gradeBadge = formatGradeBadge(score, gpa);
+    final isLearningCreated =
+        course['learningZjuCreated'] == true ||
+        (course['learningZjuCreated'] != false &&
+            text(course, 'id').isNotEmpty &&
+            !text(course, 'id').startsWith('(') &&
+            int.tryParse(text(course, 'id')) != null);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: SizedBox(
+        width: double.infinity,
+        child: OutlinedButton(
+          onPressed: () => onSelect(course),
+          style: OutlinedButton.styleFrom(
+            alignment: Alignment.centerLeft,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+            side: BorderSide(color: ink.withValues(alpha: .12)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      text(course, 'name'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: ink,
+                      ),
+                    ),
+                  ),
+                  if (!isLearningCreated) ...[
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 5,
+                        vertical: 1.5,
+                      ),
+                      decoration: BoxDecoration(
+                        color: ink.withValues(alpha: .06),
+                        borderRadius: BorderRadius.circular(3),
+                      ),
+                      child: Text(
+                        '未建课',
+                        style: TextStyle(
+                          fontSize: 9.5,
+                          color: ink.withValues(alpha: .5),
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
+                  if (gradeBadge.isNotEmpty) ...[
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 5,
+                        vertical: 1.5,
+                      ),
+                      decoration: BoxDecoration(
+                        color: seal.withValues(alpha: .08),
+                        borderRadius: BorderRadius.circular(3),
+                        border: Border.all(color: seal.withValues(alpha: .2)),
+                      ),
+                      child: Text(
+                        gradeBadge,
+                        style: const TextStyle(
+                          fontSize: 9.5,
+                          color: seal,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              if (teacher.isNotEmpty || creditVal > 0)
+                Padding(
+                  padding: const EdgeInsets.only(top: 3),
+                  child: Row(
+                    children: [
+                      if (teacher.isNotEmpty) ...[
+                        Icon(
+                          Icons.person_outline,
+                          size: 11,
+                          color: isLearningCreated
+                              ? ink
+                              : ink.withValues(alpha: .5),
+                        ),
+                        const SizedBox(width: 3),
+                        Expanded(
+                          child: Text(
+                            teacher,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: isLearningCreated
+                                  ? ink
+                                  : ink.withValues(alpha: .5),
+                            ),
+                          ),
+                        ),
+                      ] else
+                        const Spacer(),
+                      if (creditVal > 0)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 4,
+                            vertical: 1,
+                          ),
+                          decoration: BoxDecoration(
+                            color: ink.withValues(alpha: .06),
+                            borderRadius: BorderRadius.circular(3),
+                          ),
+                          child: Text(
+                            '${creditVal.toStringAsFixed(creditVal.truncateToDouble() == creditVal ? 0 : 1)} 学分',
+                            style: TextStyle(
+                              fontSize: 9,
+                              color: isLearningCreated
+                                  ? ink
+                                  : ink.withValues(alpha: .6),
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              if (text(course, 'teachingClassName').isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(
+                    text(course, 'teachingClassName'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: isLearningCreated
+                          ? ink
+                          : ink.withValues(alpha: .5),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSemesterTabs(
+    BuildContext context,
+    List<SemesterChoice> choices,
+  ) {
+    if (choices.isEmpty) return const SizedBox.shrink();
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final availableWidth = constraints.maxWidth;
+        final count = choices.length;
+
+        const spacing = 6.0;
+        final canFitSingleRow =
+            count <= 2 ||
+            (availableWidth - (count - 1) * spacing) / count >= 85.0;
+
+        if (canFitSingleRow) {
+          return Row(
+            children: [
+              for (var i = 0; i < count; i++) ...[
+                if (i > 0) const SizedBox(width: spacing),
+                Expanded(
+                  child: _panelTab(
+                    choices[i],
+                    isSelected: choices[i].id == selected,
+                    availableWidth:
+                        (availableWidth - (count - 1) * spacing) / count,
+                  ),
+                ),
+              ],
+            ],
+          );
+        }
+
+        // Otherwise split into at most 2 rows to keep within two lines
+        final row1Count = (count + 1) ~/ 2;
+        final row1 = choices.sublist(0, row1Count);
+        final row2 = choices.sublist(row1Count);
+
+        final widthPerItemRow1 =
+            (availableWidth - (row1.length - 1) * spacing) / row1.length;
+        final widthPerItemRow2 =
+            (availableWidth - (row2.length - 1) * spacing) / row2.length;
+
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                for (var i = 0; i < row1.length; i++) ...[
+                  if (i > 0) const SizedBox(width: spacing),
+                  Expanded(
+                    child: _panelTab(
+                      row1[i],
+                      isSelected: row1[i].id == selected,
+                      availableWidth: widthPerItemRow1,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                for (var i = 0; i < row2.length; i++) ...[
+                  if (i > 0) const SizedBox(width: spacing),
+                  Expanded(
+                    child: _panelTab(
+                      row2[i],
+                      isSelected: row2[i].id == selected,
+                      availableWidth: widthPerItemRow2,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _panelTab(
+    SemesterChoice choice, {
+    required bool isSelected,
+    required double availableWidth,
+  }) {
+    final displayName = choice.id == 'all' ? '全部学期' : choice.name;
+    final horizontalPad = availableWidth < 70
+        ? 2.0
+        : (availableWidth < 90 ? 4.0 : 6.0);
+    final fontSize = availableWidth < 70
+        ? 10.5
+        : (availableWidth < 90 ? 11.0 : 12.0);
+
+    return InkWell(
+      onTap: () {
+        if (choice.id != selected) {
+          onChanged(choice.id);
+        }
+      },
+      borderRadius: BorderRadius.circular(6),
+      child: Container(
+        height: 32,
+        padding: EdgeInsets.symmetric(horizontal: horizontalPad),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: isSelected ? blue.withValues(alpha: .14) : Colors.transparent,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: isSelected ? blue : ink.withValues(alpha: .18),
+            width: isSelected ? 1.5 : 1,
+          ),
+        ),
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(
+            displayName,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: fontSize,
+              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+              color: isSelected ? blue : ink,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  static String _formatCredit(double cr) {
+    if (cr <= 0) return '0';
+    return cr == cr.roundToDouble()
+        ? cr.toInt().toString()
+        : cr.toStringAsFixed(1);
+  }
+
+  static SemesterGradeStats _computePanelStats({
+    required String selected,
+    required List<Json> courses,
+    required List<Json> allCourses,
+    required List<Json> allGrades,
+    required Set<String> matchingIds,
+  }) {
+    if (selected == 'all') {
+      if (allGrades.isNotEmpty) {
+        final gs = GradeStats.compute(grades: allGrades, currentSemester: '');
+        final totalEnrolled = courseCredits(allCourses);
+        int gradedCount = 0;
+        for (final g in allGrades) {
+          final orig = text(g, 'original', text(g, 'score')).trim();
+          if (orig.isNotEmpty && !['弃修', '缓考', '待录'].contains(orig)) {
+            gradedCount++;
+          }
+        }
+        return SemesterGradeStats(
+          selected: selected,
+          gpa: gs.gpa,
+          earnedCredits: gs.totalCredits,
+          enrolledCredits: totalEnrolled > 0 ? totalEnrolled : gs.totalCredits,
+          avgScore: gs.avgScore,
+          hasGrades: gs.hasGrades && gs.gpa > 0,
+          totalCourses: allCourses.length,
+          gradedCourses: gradedCount > 0
+              ? gradedCount
+              : allCourses.where((c) => text(c, 'score').isNotEmpty).length,
+        );
+      }
+    }
+
+    final normZdbkSem = semesterToId(selected) ?? selected;
+
+    final semGrades = allGrades.where((g) {
+      final sem = text(g, 'semester').trim();
+      final xkkh = text(g, 'xkkh').trim();
+      final semFromXkkh =
+          RegExp(r'(\d{4}-\d{4}-[12])').firstMatch(xkkh)?[1] ?? sem;
+      return matchingIds.contains(sem) ||
+          matchingIds.contains(semFromXkkh) ||
+          (normZdbkSem.isNotEmpty &&
+              (sem == normZdbkSem || semFromXkkh == normZdbkSem));
+    }).toList();
+
+    if (semGrades.isNotEmpty) {
+      final gs = GradeStats.compute(
+        grades: semGrades,
+        currentSemester: normZdbkSem,
+      );
+      final totalEnrolled = courseCredits(courses);
+      int gradedCount = 0;
+      for (final g in semGrades) {
+        final orig = text(g, 'original', text(g, 'score')).trim();
+        if (orig.isNotEmpty && !['弃修', '缓考', '待录'].contains(orig)) {
+          gradedCount++;
+        }
+      }
+      return SemesterGradeStats(
+        selected: selected,
+        gpa: gs.gpa,
+        earnedCredits: gs.totalCredits,
+        enrolledCredits: totalEnrolled > 0 ? totalEnrolled : gs.totalCredits,
+        avgScore: gs.avgScore,
+        hasGrades: gs.hasGrades && gs.gpa > 0,
+        totalCourses: courses.length,
+        gradedCourses: gradedCount,
+      );
+    }
+
+    double gpaWeighted = 0;
+    double gpaCreditSum = 0;
+    double scoreWeighted = 0;
+    double scoreCreditSum = 0;
+    double earnedCreditSum = 0;
+    final totalEnrolled = courseCredits(courses);
+    int gradedCount = 0;
+
+    for (final c in courses) {
+      final cr = double.tryParse('${c['credit']}') ?? 0.0;
+      final scoreStr = text(c, 'score', text(c, 'original')).trim();
+      final gpaVal = double.tryParse(
+        text(c, 'gpa', text(c, 'fivePoint')).trim(),
+      );
+      final scoreVal = double.tryParse(scoreStr);
+
+      if (scoreStr.isNotEmpty && !['弃修', '缓考', '待录'].contains(scoreStr)) {
+        gradedCount++;
+        final isFailing =
+            scoreStr == '不合格' || (scoreVal != null && scoreVal < 60);
+        if (!isFailing && cr > 0) {
+          earnedCreditSum += cr;
+        }
+        if (gpaVal != null &&
+            gpaVal >= 0 &&
+            cr > 0 &&
+            !['合格', '不合格'].contains(scoreStr)) {
+          gpaWeighted += gpaVal * cr;
+          gpaCreditSum += cr;
+        }
+        if (scoreVal != null && scoreVal >= 0 && cr > 0) {
+          scoreWeighted += scoreVal * cr;
+          scoreCreditSum += cr;
+        }
+      }
+    }
+
+    final finalGpa = gpaCreditSum > 0 ? (gpaWeighted / gpaCreditSum) : 0.0;
+    final finalAvg = scoreCreditSum > 0
+        ? (scoreWeighted / scoreCreditSum)
+        : 0.0;
+
+    return SemesterGradeStats(
+      selected: selected,
+      gpa: finalGpa,
+      earnedCredits: earnedCreditSum,
+      enrolledCredits: totalEnrolled,
+      avgScore: finalAvg,
+      hasGrades: gpaCreditSum > 0,
+      totalCourses: courses.length,
+      gradedCourses: gradedCount,
+    );
+  }
+
+  Widget _buildStatsCard(BuildContext context, SemesterGradeStats stats) {
+    final gpaText = stats.hasGrades && stats.gpa > 0
+        ? stats.gpa.toStringAsFixed(2)
+        : (stats.totalCourses > 0 && stats.gradedCourses == 0 ? '修读中' : '--');
+
+    final creditText = stats.hasGrades
+        ? (stats.selected == 'all'
+              ? _formatCredit(stats.earnedCredits)
+              : (stats.enrolledCredits > 0
+                    ? '${_formatCredit(stats.earnedCredits)} / ${_formatCredit(stats.enrolledCredits)}'
+                    : _formatCredit(stats.earnedCredits)))
+        : (stats.enrolledCredits > 0
+              ? _formatCredit(stats.enrolledCredits)
+              : '--');
+
+    final scoreText = stats.hasGrades && stats.avgScore > 0
+        ? stats.avgScore.toStringAsFixed(1)
+        : '--';
+
+    final gpaLabel = stats.selected == 'all' ? '目前总绩点' : '学期绩点';
+    final creditLabel = stats.selected == 'all'
+        ? '获得总学分'
+        : (stats.hasGrades ? '获得/已选学分' : '已选学分');
+    final scoreLabel = stats.selected == 'all' ? '百分制均分' : '学期百分制';
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: paper,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: ink.withValues(alpha: .12)),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              _buildStatMetric(
+                value: gpaText,
+                label: gpaLabel,
+                isHighlight: stats.hasGrades,
+              ),
+              Container(
+                width: 1,
+                height: 26,
+                color: ink.withValues(alpha: .08),
+              ),
+              _buildStatMetric(value: creditText, label: creditLabel),
+              Container(
+                width: 1,
+                height: 26,
+                color: ink.withValues(alpha: .08),
+              ),
+              _buildStatMetric(value: scoreText, label: scoreLabel),
+            ],
+          ),
+          const SizedBox(height: 5),
+          Text(
+            stats.selected == 'all'
+                ? '全历程共 ${stats.totalCourses} 门课程 · 已出分 ${stats.gradedCourses} 门'
+                : '本学期共 ${stats.totalCourses} 门课程 · ${stats.gradedCourses > 0 ? "已出分 ${stats.gradedCourses} 门" : "暂未出分"}',
+            style: TextStyle(fontSize: 10, color: ink.withValues(alpha: .5)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatMetric({
+    required String value,
+    required String label,
+    bool isHighlight = false,
+  }) {
+    return Expanded(
+      child: Column(
+        children: [
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              value,
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.bold,
+                color: isHighlight ? seal : ink,
+              ),
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 10, color: ink.withValues(alpha: .6)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class SemesterGradeStats {
+  final String selected;
+  final double gpa;
+  final double earnedCredits;
+  final double enrolledCredits;
+  final double avgScore;
+  final bool hasGrades;
+  final int totalCourses;
+  final int gradedCourses;
+
+  const SemesterGradeStats({
+    required this.selected,
+    required this.gpa,
+    required this.earnedCredits,
+    required this.enrolledCredits,
+    required this.avgScore,
+    required this.hasGrades,
+    required this.totalCourses,
+    required this.gradedCourses,
+  });
 }
 
 class AssignmentRightPanel extends StatelessWidget {
@@ -2165,12 +3488,14 @@ class CourseDetailSheet extends StatefulWidget {
     required this.onDownload,
     required this.onPreview,
     this.onAssignmentDetail,
+    this.onTabChanged,
   });
   final AppServices services;
   final Json course;
   final Future<void> Function(Json) onDownload;
   final Future<void> Function(Json) onPreview;
   final void Function(Json)? onAssignmentDetail;
+  final ValueChanged<String>? onTabChanged;
 
   @override
   State<CourseDetailSheet> createState() => _CourseDetailSheetState();
@@ -2201,27 +3526,39 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
     }
   }
 
+  bool get _isLearningCreated =>
+      widget.course['learningZjuCreated'] == true ||
+      (widget.course['learningZjuCreated'] != false &&
+          text(widget.course, 'id').isNotEmpty &&
+          !text(widget.course, 'id').startsWith('(') &&
+          int.tryParse(text(widget.course, 'id')) != null);
+
   @override
   void initState() {
     super.initState();
     final courseId = text(widget.course, 'id');
-    materials = widget.services.campus.materials(courseId);
-    assignments = widget.services.campus.assignments(courseId: courseId);
+    materials = (!_isLearningCreated || courseId.isEmpty)
+        ? Future.value(<Json>[])
+        : widget.services.campus.materials(courseId);
+    assignments = (!_isLearningCreated || courseId.isEmpty)
+        ? Future.value(<Json>[])
+        : widget.services.campus.assignments(courseId: courseId);
   }
 
   Future<void> _refreshMaterials() async {
+    final id = text(widget.course, 'id');
+    if (!_isLearningCreated || id.isEmpty) return;
     setState(() {
-      materials = widget.services.campus.materials(
-        text(widget.course, 'id'),
-        refresh: true,
-      );
+      materials = widget.services.campus.materials(id, refresh: true);
     });
   }
 
   Future<void> _refreshAssignments() async {
+    final id = text(widget.course, 'id');
+    if (!_isLearningCreated || id.isEmpty) return;
     setState(() {
       assignments = widget.services.campus.assignments(
-        courseId: text(widget.course, 'id'),
+        courseId: id,
         refresh: true,
       );
     });
@@ -2232,8 +3569,7 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
       ...a,
       if (text(a, 'courseName').isEmpty)
         'courseName': text(widget.course, 'name'),
-      if (text(a, 'courseId').isEmpty)
-        'courseId': text(widget.course, 'id'),
+      if (text(a, 'courseId').isEmpty) 'courseId': text(widget.course, 'id'),
     };
     if (widget.onAssignmentDetail != null) {
       widget.onAssignmentDetail!(enriched);
@@ -2250,7 +3586,10 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
             children: [
               Text(
                 text(enriched, 'title'),
-                style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                style: const TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
               const SizedBox(height: 10),
               Text(
@@ -2259,7 +3598,9 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
               ),
               const Divider(height: 28),
               MarkdownBody(
-                data: html.parse(text(enriched, 'description')).body?.text ?? '暂无作业说明',
+                data:
+                    html.parse(text(enriched, 'description')).body?.text ??
+                    '暂无作业说明',
                 selectable: true,
               ),
               const SizedBox(height: 12),
@@ -2281,6 +3622,100 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
     }
   }
 
+  Widget _buildCourseMetaRow() {
+    final teacher = text(widget.course, 'teacher');
+    final location = text(widget.course, 'location');
+    final time = text(widget.course, 'scheduleTime');
+    final creditVal = double.tryParse('${widget.course['credit']}') ?? 0.0;
+    final score = text(
+      widget.course,
+      'score',
+      text(widget.course, 'original'),
+    ).trim();
+    final gpa = text(
+      widget.course,
+      'gpa',
+      text(widget.course, 'fivePoint'),
+    ).trim();
+    final gradeBadge = formatGradeBadge(score, gpa);
+
+    if (teacher.isEmpty &&
+        location.isEmpty &&
+        time.isEmpty &&
+        creditVal <= 0 &&
+        gradeBadge.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+      child: Wrap(
+        spacing: 14,
+        runSpacing: 4,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          if (time.isNotEmpty)
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.access_time, size: 13, color: ink),
+                const SizedBox(width: 4),
+                Text(time, style: const TextStyle(fontSize: 12, color: ink)),
+              ],
+            ),
+          if (location.isNotEmpty)
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.room_outlined, size: 13, color: ink),
+                const SizedBox(width: 4),
+                Text(
+                  location,
+                  style: const TextStyle(fontSize: 12, color: ink),
+                ),
+              ],
+            ),
+          if (teacher.isNotEmpty)
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.person_outline, size: 13, color: ink),
+                const SizedBox(width: 4),
+                Text(teacher, style: const TextStyle(fontSize: 12, color: ink)),
+              ],
+            ),
+          if (creditVal > 0)
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.stars_outlined, size: 13, color: ink),
+                const SizedBox(width: 4),
+                Text(
+                  '${creditVal.toStringAsFixed(creditVal.truncateToDouble() == creditVal ? 0 : 1)} 学分',
+                  style: const TextStyle(fontSize: 12, color: ink),
+                ),
+              ],
+            ),
+          if (gradeBadge.isNotEmpty)
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.verified_outlined, size: 13, color: seal),
+                const SizedBox(width: 4),
+                Text(
+                  gradeBadge,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: seal,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) => SizedBox(
     height: MediaQuery.sizeOf(context).height * .9,
@@ -2288,7 +3723,7 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 12, 8),
+          padding: const EdgeInsets.fromLTRB(20, 16, 12, 4),
           child: Row(
             children: [
               const Icon(Icons.school_outlined, color: gold),
@@ -2309,6 +3744,7 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
             ],
           ),
         ),
+        _buildCourseMetaRow(),
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
           child: Row(
@@ -2320,6 +3756,7 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
                 onSelected: (_) {
                   if (currentTab != 'materials') {
                     setState(() => currentTab = 'materials');
+                    widget.onTabChanged?.call('materials');
                   }
                 },
               ),
@@ -2331,9 +3768,24 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
                 onSelected: (_) {
                   if (currentTab != 'assignments') {
                     setState(() => currentTab = 'assignments');
+                    widget.onTabChanged?.call('assignments');
                   }
                 },
               ),
+              if (!_isLearningCreated) ...[
+                const Spacer(),
+                Flexible(
+                  child: Text(
+                    '学在浙大无此课程',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: ink.withValues(alpha: .5),
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
@@ -2351,9 +3803,7 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
     future: materials,
     builder: (context, snapshot) {
       if (snapshot.connectionState == ConnectionState.waiting) {
-        return const Center(
-          child: CircularProgressIndicator(color: blue),
-        );
+        return const Center(child: CircularProgressIndicator(color: blue));
       }
       if (snapshot.hasError) {
         return Center(
@@ -2420,14 +3870,8 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
                           children: [
                             Builder(
                               builder: (context) {
-                                final fileId = text(
-                                  f,
-                                  'id',
-                                  text(f, 'fileId'),
-                                );
-                                final busy = busyFileIds.contains(
-                                  fileId,
-                                );
+                                final fileId = text(f, 'id', text(f, 'fileId'));
+                                final busy = busyFileIds.contains(fileId);
                                 return Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
@@ -2451,11 +3895,10 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
                                           ? const SizedBox(
                                               width: 16,
                                               height: 16,
-                                              child:
-                                                  CircularProgressIndicator(
-                                                    strokeWidth: 2,
-                                                    color: paperCard,
-                                                  ),
+                                              child: CircularProgressIndicator(
+                                                strokeWidth: 2,
+                                                color: paperCard,
+                                              ),
                                             )
                                           : const Text('下载'),
                                     ),
@@ -2478,9 +3921,7 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
     future: assignments,
     builder: (context, snapshot) {
       if (snapshot.connectionState == ConnectionState.waiting) {
-        return const Center(
-          child: CircularProgressIndicator(color: blue),
-        );
+        return const Center(child: CircularProgressIndicator(color: blue));
       }
       if (snapshot.hasError) {
         return Center(
@@ -2558,10 +3999,11 @@ class _DownloadCardState extends State<DownloadCard> {
     try {
       await fn();
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(e is AppError ? e.message : '操作失败，请重试。')),
         );
+      }
     } finally {
       if (mounted) setState(() => busy = false);
     }
@@ -2689,8 +4131,9 @@ class _DownloadCardState extends State<DownloadCard> {
   Future<void> openLocal() async {
     final file = await s.files.file(r);
     final result = await OpenFilex.open(file.path);
-    if (result.type != ResultType.done)
+    if (result.type != ResultType.done) {
       throw AppError('FILE_OPEN_FAILED', result.message);
+    }
   }
 
   Future<void> redownload() async {
@@ -2756,11 +4199,12 @@ class PreviewSheet extends StatelessWidget {
     ),
   );
   Widget _body(BuildContext context) {
-    if (kind == 'image')
+    if (kind == 'image') {
       return Center(
         child: InteractiveViewer(child: Image.file(file, fit: BoxFit.contain)),
       );
-    if (kind == 'text')
+    }
+    if (kind == 'text') {
       return FutureBuilder<String>(
         future: file.readAsString(),
         builder: (context, snapshot) => SingleChildScrollView(
@@ -2771,6 +4215,7 @@ class PreviewSheet extends StatelessWidget {
           ),
         ),
       );
+    }
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -2788,7 +4233,62 @@ class PreviewSheet extends StatelessWidget {
   }
 }
 
-class TimetableView extends StatelessWidget {
+class SubSemesterChoice {
+  const SubSemesterChoice({required this.id, required this.name});
+  final String id;
+  final String name;
+}
+
+List<SubSemesterChoice> getSubSemesterChoices(
+  String semester, [
+  Iterable<TimetableEntry> entries = const [],
+]) {
+  final s = semester.toLowerCase();
+  if (s.contains('秋冬') ||
+      s.endsWith('-1') ||
+      s.contains('秋') ||
+      s.contains('冬')) {
+    return const [
+      SubSemesterChoice(id: '秋', name: '秋学期'),
+      SubSemesterChoice(id: '冬', name: '冬学期'),
+    ];
+  }
+  if (s.contains('春夏') ||
+      s.endsWith('-2') ||
+      s.contains('春') ||
+      s.contains('夏')) {
+    return const [
+      SubSemesterChoice(id: '春', name: '春学期'),
+      SubSemesterChoice(id: '夏', name: '夏学期'),
+    ];
+  }
+  if (s.contains('暑') || s.contains('短') || s.endsWith('-3')) {
+    return const [SubSemesterChoice(id: '暑', name: '暑学期')];
+  }
+  final subs = entries
+      .map((e) => e.subSemester.trim())
+      .where((sub) => sub.isNotEmpty)
+      .toSet();
+  if (subs.isNotEmpty) {
+    return [for (final sub in subs) SubSemesterChoice(id: sub, name: '$sub学期')];
+  }
+  return const [];
+}
+
+List<TimetableEntry> filterTimetableBySubSemester(
+  List<TimetableEntry> entries,
+  String subSemester,
+) {
+  if (subSemester.isEmpty) {
+    return entries;
+  }
+  return entries.where((e) {
+    if (e.subSemester.isEmpty) return true;
+    return e.subSemester.contains(subSemester);
+  }).toList();
+}
+
+class TimetableView extends StatefulWidget {
   const TimetableView({
     super.key,
     required this.entries,
@@ -2801,6 +4301,7 @@ class TimetableView extends StatelessWidget {
     this.onExportPng,
     this.onExportXlsx,
     this.onRefresh,
+    this.onSelectCourse,
   });
   final List<TimetableEntry> entries;
   final String semester;
@@ -2812,12 +4313,53 @@ class TimetableView extends StatelessWidget {
   final VoidCallback? onExportPng;
   final VoidCallback? onExportXlsx;
   final VoidCallback? onRefresh;
+  final ValueChanged<TimetableEntry>? onSelectCourse;
+
+  @override
+  State<TimetableView> createState() => _TimetableViewState();
+}
+
+class _TimetableViewState extends State<TimetableView> {
+  String _selectedSubSemester = '';
+
+  @override
+  void initState() {
+    super.initState();
+    final choices = getSubSemesterChoices(widget.semester, widget.entries);
+    _selectedSubSemester = choices.isNotEmpty ? choices.first.id : '';
+  }
+
+  @override
+  void didUpdateWidget(TimetableView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.semester != widget.semester) {
+      final choices = getSubSemesterChoices(widget.semester, widget.entries);
+      _selectedSubSemester = choices.isNotEmpty ? choices.first.id : '';
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    final merged = mergeTimetable(entries);
+    final subChoices = getSubSemesterChoices(widget.semester, widget.entries);
+    final effectiveSub = subChoices.any((c) => c.id == _selectedSubSemester)
+        ? _selectedSubSemester
+        : (subChoices.isNotEmpty ? subChoices.first.id : '');
+    final filtered = filterTimetableBySubSemester(widget.entries, effectiveSub);
+    final merged = mergeTimetable(filtered);
     final courses = merged.map((e) => e.courseName).toSet().toList();
-    final showHeader = !isExporting;
+    final showHeader = !widget.isExporting;
+    final isMobile = !widget.wide;
+    final sessionColWidth = isMobile ? 30.0 : 52.0;
+
+    String subTitleSuffix() {
+      if (effectiveSub.isEmpty) return '';
+      final choice = subChoices.firstWhere(
+        (c) => c.id == effectiveSub,
+        orElse: () =>
+            SubSemesterChoice(id: effectiveSub, name: '$effectiveSub学期'),
+      );
+      return ' - ${choice.name}';
+    }
 
     return Container(
       width: double.infinity,
@@ -2832,31 +4374,46 @@ class TimetableView extends StatelessWidget {
           else
             Center(
               child: Text(
-                '浙江大学课程表（$semester）',
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                '浙江大学课程表（${widget.semester}${subTitleSuffix()}）',
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
           const SizedBox(height: 10),
-          if (entries.isEmpty)
+          if (subChoices.length > 1) ...[
+            _subSemesterBar(subChoices, effectiveSub, isMobile),
+            const SizedBox(height: 10),
+          ],
+          if (widget.entries.isEmpty)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 48),
               child: PageEmpty(icon: 'calendar-grid', title: '该学期暂无课表数据'),
             )
+          else if (filtered.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 48),
+              child: PageEmpty(icon: 'calendar-grid', title: '该分段暂无课程安排'),
+            )
           else ...[
-            _gridHeader(),
+            _gridHeader(isMobile, sessionColWidth),
             SizedBox(
               height: 13 * 52,
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   SizedBox(
-                    width: 64,
+                    width: sessionColWidth,
                     child: Column(
-                      children: [for (var i = 1; i <= 13; i++) _sectionLabel(i)],
+                      children: [
+                        for (var i = 1; i <= 13; i++)
+                          _sectionLabel(i, isMobile),
+                      ],
                     ),
                   ),
                   for (var day = 1; day <= 7; day++)
-                    Expanded(child: _dayColumn(day, merged, courses)),
+                    Expanded(child: _dayColumn(day, merged, courses, isMobile)),
                 ],
               ),
             ),
@@ -2866,47 +4423,174 @@ class TimetableView extends StatelessWidget {
     );
   }
 
+  Widget _subSemesterBar(
+    List<SubSemesterChoice> choices,
+    String activeId,
+    bool compact,
+  ) => SingleChildScrollView(
+    scrollDirection: Axis.horizontal,
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Text(
+          '学期分段：',
+          style: TextStyle(
+            fontSize: compact ? 11 : 12,
+            color: ink.withValues(alpha: .68),
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        for (var i = 0; i < choices.length; i++) ...[
+          if (i > 0) SizedBox(width: compact ? 6 : 8),
+          _subSemesterButton(choices[i], activeId, compact),
+        ],
+      ],
+    ),
+  );
+
+  Widget _subSemesterButton(
+    SubSemesterChoice choice,
+    String activeId,
+    bool compact,
+  ) {
+    final isSelected = choice.id == activeId;
+    return InkWell(
+      onTap: () {
+        if (choice.id != _selectedSubSemester) {
+          setState(() {
+            _selectedSubSemester = choice.id;
+          });
+        }
+      },
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        padding: EdgeInsets.symmetric(
+          horizontal: compact ? 10 : 12,
+          vertical: 4,
+        ),
+        decoration: BoxDecoration(
+          color: isSelected ? blue : blue.withValues(alpha: .06),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: isSelected ? blue : blue.withValues(alpha: .22),
+            width: 1,
+          ),
+        ),
+        child: Text(
+          choice.name,
+          style: TextStyle(
+            fontSize: compact ? 11 : 12,
+            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+            color: isSelected ? paperCard : ink,
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _header(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
-      final compactActions = constraints.maxWidth < 560;
-      return Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Expanded(
+      final compactActions = constraints.maxWidth < 620;
+      final tabAreaWidth = compactActions
+          ? math.max(120.0, constraints.maxWidth - 120)
+          : constraints.maxWidth * 0.5;
+
+      final count = widget.choices.length;
+      final spacing = count > 4 ? 4.0 : 6.0;
+      final estimatedNaturalWidth =
+          count * 95.0 + math.max(0, count - 1) * spacing;
+      final needAdaptive =
+          !compactActions && (estimatedNaturalWidth > tabAreaWidth);
+
+      Widget tabsWidget;
+      if (compactActions) {
+        tabsWidget = SizedBox(
+          width: tabAreaWidth,
+          child: ScrollConfiguration(
+            behavior: ScrollConfiguration.of(context).copyWith(
+              scrollbars: false,
+              dragDevices: {
+                PointerDeviceKind.touch,
+                PointerDeviceKind.mouse,
+                PointerDeviceKind.trackpad,
+              },
+            ),
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
+              physics: const BouncingScrollPhysics(),
               child: Row(
                 children: [
-                  for (final choice in choices) ...[
-                    _semesterTab(choice, compact: compactActions),
-                    const SizedBox(width: 8),
+                  for (final choice in widget.choices) ...[
+                    _semesterTab(choice, compact: true),
+                    const SizedBox(width: 6),
                   ],
                 ],
               ),
             ),
           ),
-          const SizedBox(width: 8),
+        );
+      } else if (needAdaptive) {
+        final widthPerTab =
+            (tabAreaWidth - math.max(0, count - 1) * spacing) / count;
+        tabsWidget = SizedBox(
+          width: tabAreaWidth,
+          child: Row(
+            children: [
+              for (var i = 0; i < count; i++) ...[
+                if (i > 0) SizedBox(width: spacing),
+                Expanded(
+                  child: _adaptiveSemesterTab(
+                    widget.choices[i],
+                    availableWidth: widthPerTab,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        );
+      } else {
+        tabsWidget = ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: tabAreaWidth),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (var i = 0; i < count; i++) ...[
+                if (i > 0) const SizedBox(width: 6),
+                _semesterTab(widget.choices[i], compact: false),
+              ],
+            ],
+          ),
+        );
+      }
+
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          tabsWidget,
+          const Spacer(),
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               if (compactActions) ...[
                 IconButton(
-                  onPressed: entries.isEmpty ? null : onExportPng,
+                  onPressed: widget.entries.isEmpty ? null : widget.onExportPng,
                   tooltip: '导出图片',
                   visualDensity: VisualDensity.compact,
                   icon: const Icon(Icons.image_outlined, size: 18),
                 ),
                 IconButton(
-                  onPressed: entries.isEmpty ? null : onExportXlsx,
+                  onPressed: widget.entries.isEmpty
+                      ? null
+                      : widget.onExportXlsx,
                   tooltip: '导出 Excel',
                   visualDensity: VisualDensity.compact,
                   icon: const Icon(Icons.table_chart_outlined, size: 18),
                 ),
                 IconButton(
-                  onPressed: refreshing ? null : onRefresh,
+                  onPressed: widget.refreshing ? null : widget.onRefresh,
                   tooltip: '刷新课表',
                   visualDensity: VisualDensity.compact,
-                  icon: refreshing
+                  icon: widget.refreshing
                       ? const SizedBox(
                           width: 16,
                           height: 16,
@@ -2919,7 +4603,7 @@ class TimetableView extends StatelessWidget {
                 ),
               ] else ...[
                 TextButton.icon(
-                  onPressed: entries.isEmpty ? null : onExportPng,
+                  onPressed: widget.entries.isEmpty ? null : widget.onExportPng,
                   icon: const Icon(Icons.image_outlined, size: 16),
                   label: const Text('导出图片'),
                   style: TextButton.styleFrom(
@@ -2929,7 +4613,9 @@ class TimetableView extends StatelessWidget {
                 ),
                 const SizedBox(width: 4),
                 TextButton.icon(
-                  onPressed: entries.isEmpty ? null : onExportXlsx,
+                  onPressed: widget.entries.isEmpty
+                      ? null
+                      : widget.onExportXlsx,
                   icon: const Icon(Icons.table_chart_outlined, size: 16),
                   label: const Text('导出 Excel'),
                   style: TextButton.styleFrom(
@@ -2939,9 +4625,9 @@ class TimetableView extends StatelessWidget {
                 ),
                 const SizedBox(width: 4),
                 IconButton(
-                  onPressed: refreshing ? null : onRefresh,
+                  onPressed: widget.refreshing ? null : widget.onRefresh,
                   tooltip: '刷新课表',
-                  icon: refreshing
+                  icon: widget.refreshing
                       ? const SizedBox(
                           width: 16,
                           height: 16,
@@ -2960,19 +4646,69 @@ class TimetableView extends StatelessWidget {
     },
   );
 
-  Widget _semesterTab(SemesterChoice choice, {bool compact = false}) {
-    final isSelected = choice.id == semester;
+  Widget _adaptiveSemesterTab(
+    SemesterChoice choice, {
+    required double availableWidth,
+  }) {
+    final isSelected = choice.id == widget.semester;
+    final horizontalPad = availableWidth < 70
+        ? 2.0
+        : (availableWidth < 90 ? 4.0 : 6.0);
+    final fontSize = availableWidth < 70
+        ? 10.5
+        : (availableWidth < 90 ? 11.0 : 12.0);
+
     return InkWell(
       onTap: () {
-        if (choice.id != semester) {
-          onSemesterChanged?.call(choice.id);
+        if (choice.id != widget.semester) {
+          widget.onSemesterChanged?.call(choice.id);
         }
       },
       borderRadius: BorderRadius.circular(6),
       child: Container(
+        height: 32,
+        padding: EdgeInsets.symmetric(horizontal: horizontalPad, vertical: 5),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: isSelected ? blue.withValues(alpha: .14) : Colors.transparent,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: isSelected ? blue : ink.withValues(alpha: .18),
+            width: isSelected ? 1.5 : 1,
+          ),
+        ),
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(
+            choice.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: fontSize,
+              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+              color: isSelected ? blue : ink,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _semesterTab(SemesterChoice choice, {bool compact = false}) {
+    final isSelected = choice.id == widget.semester;
+    return InkWell(
+      onTap: () {
+        if (choice.id != widget.semester) {
+          widget.onSemesterChanged?.call(choice.id);
+        }
+      },
+      borderRadius: BorderRadius.circular(6),
+      child: Container(
+        height: 32,
+        alignment: Alignment.center,
         padding: EdgeInsets.symmetric(
           horizontal: compact ? 10 : 14,
-          vertical: 6,
+          vertical: compact ? 5 : 6,
         ),
         decoration: BoxDecoration(
           color: isSelected ? blue.withValues(alpha: .14) : Colors.transparent,
@@ -2984,6 +4720,8 @@ class TimetableView extends StatelessWidget {
         ),
         child: Text(
           choice.name,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
           style: TextStyle(
             fontSize: compact ? 12 : 13,
             fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
@@ -2994,14 +4732,14 @@ class TimetableView extends StatelessWidget {
     );
   }
 
-  Widget _gridHeader() => Row(
+  Widget _gridHeader(bool isMobile, double sessionColWidth) => Row(
     children: [
-      const SizedBox(
-        width: 64,
+      SizedBox(
+        width: sessionColWidth,
         child: Text(
-          '节次\n上课时间',
+          isMobile ? '节次\n时间' : '节次\n上课时间',
           textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 10, color: ink),
+          style: TextStyle(fontSize: isMobile ? 8 : 10, color: ink),
         ),
       ),
       for (final day in _dayNames)
@@ -3009,21 +4747,25 @@ class TimetableView extends StatelessWidget {
           child: Center(
             child: Text(
               '周$day',
-              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: isMobile ? 10.5 : 12,
+              ),
             ),
           ),
         ),
     ],
   );
-  Widget _sectionLabel(int i) => SizedBox(
+
+  Widget _sectionLabel(int i, bool isMobile) => SizedBox(
     height: 52,
     child: Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         Text(
           '$i',
-          style: const TextStyle(
-            fontSize: 11,
+          style: TextStyle(
+            fontSize: isMobile ? 9.5 : 11,
             fontWeight: FontWeight.bold,
             color: blue,
           ),
@@ -3031,77 +4773,486 @@ class TimetableView extends StatelessWidget {
         Text(
           '${sessionTimes[i][0]}\n${sessionTimes[i][1]}',
           textAlign: TextAlign.center,
-          style: const TextStyle(fontSize: 8, color: ink),
+          style: TextStyle(
+            fontSize: isMobile ? 6.8 : 8,
+            color: ink,
+            height: 1.1,
+          ),
         ),
       ],
     ),
   );
+
+  static String _formatCourseName(String name, {required bool isMobile}) {
+    if (!isMobile) return name;
+    final cleaned = name.replaceAll('\n', '').trim();
+    final chars = cleaned.characters.toList();
+    if (chars.isEmpty) return name;
+
+    // 移动端保证一行显示 3 个字，最多 3 行（最多 8 个字再省略），杜绝 4-3-1 等怪异换行
+    final line1 = chars.take(3).join();
+    if (chars.length <= 3) return line1;
+
+    final line2 = chars.skip(3).take(3).join();
+    if (chars.length <= 6) return '$line1\n$line2';
+
+    if (chars.length <= 8) {
+      final line3 = chars.skip(6).take(2).join();
+      return '$line1\n$line2\n$line3';
+    } else {
+      final line3 = '${chars.skip(6).take(2).join()}...';
+      return '$line1\n$line2\n$line3';
+    }
+  }
+
   Widget _dayColumn(
     int day,
     List<TimetableEntry> entries,
     List<String> courses,
+    bool isMobile,
   ) => Stack(
     children: [
-      for (var i = 0; i < 13; i++)
-        Positioned(
-          top: i * 52,
-          left: 0,
-          right: 0,
-          height: 52,
-          child: Container(
-            decoration: BoxDecoration(
-              border: Border.all(color: ink.withValues(alpha: .09)),
-            ),
-          ),
-        ),
+      const SizedBox(height: 13 * 52),
       for (final e in entries.where(
         (e) => e.weekday == day && e.startSection <= 13,
       ))
         Positioned(
           top: (e.startSection - 1) * 52 + 2,
-          left: 2,
-          right: 2,
+          left: isMobile ? 1 : 2,
+          right: isMobile ? 1 : 2,
           height:
               ((e.endSection.clamp(e.startSection, 13) - e.startSection + 1) *
                           52 -
                       4)
                   .toDouble(),
-          child: Container(
-            padding: const EdgeInsets.all(5),
-            decoration: BoxDecoration(
-              color: Color(
-                courseColors[courses.indexOf(e.courseName) %
-                    courseColors.length],
-              ),
-              border: Border(
-                left: BorderSide(color: blue.withValues(alpha: .55), width: 2),
-              ),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: widget.onSelectCourse != null
+                  ? () => widget.onSelectCourse!(e)
+                  : null,
               borderRadius: BorderRadius.circular(3),
-            ),
-            child: SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    e.courseName,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
+              child: Container(
+                padding: EdgeInsets.symmetric(
+                  horizontal: isMobile ? 2 : 5,
+                  vertical: isMobile ? 3 : 5,
+                ),
+                decoration: BoxDecoration(
+                  color: Color(
+                    courseColors[courses.indexOf(e.courseName) %
+                        courseColors.length],
+                  ),
+                  border: Border(
+                    left: BorderSide(
+                      color: blue.withValues(alpha: .55),
+                      width: isMobile ? 1.5 : 2,
                     ),
                   ),
-                  Text(
-                    '${e.teacher}\n${e.location}\n${e.weeks.isEmpty ? '' : '${compressWeeks(e.weeks)} 周'}',
-                    style: const TextStyle(fontSize: 8),
+                  borderRadius: BorderRadius.circular(3),
+                ),
+                child: SingleChildScrollView(
+                  physics: const NeverScrollableScrollPhysics(),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _formatCourseName(e.courseName, isMobile: isMobile),
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: isMobile ? 8.5 : 10,
+                          fontWeight: FontWeight.bold,
+                          height: 1.15,
+                        ),
+                      ),
+                      const SizedBox(height: 1),
+                      Text(
+                        '${e.teacher}\n${e.location}\n${e.subSemester.isNotEmpty ? '${e.subSemester} ' : ''}${e.weeks.isEmpty ? '' : '${compressWeeks(e.weeks)} 周'}',
+                        style: TextStyle(
+                          fontSize: isMobile ? 7 : 8,
+                          height: 1.15,
+                        ),
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
             ),
           ),
         ),
     ],
   );
+}
+
+double _parseNum(dynamic v) {
+  if (v is num) return v.toDouble();
+  if (v is String) return double.tryParse(v) ?? 0.0;
+  return 0.0;
+}
+
+class GradeStats {
+  final double gpa;
+  final double totalCredits;
+  final double avgScore;
+  final double semesterCredits;
+  final bool hasGrades;
+
+  const GradeStats({
+    required this.gpa,
+    required this.totalCredits,
+    required this.avgScore,
+    required this.semesterCredits,
+    required this.hasGrades,
+  });
+
+  bool get hasData => hasGrades;
+  double get totalEarnedCredits => totalCredits;
+  double get averageScore => avgScore;
+
+  static GradeStats compute({
+    required List<Json> grades,
+    required String currentSemester,
+    List<String> currentCourseNames = const [],
+    double timetableCredits = 0.0,
+  }) {
+    if (grades.isEmpty) {
+      return GradeStats(
+        gpa: 0,
+        totalCredits: 0,
+        avgScore: 0,
+        semesterCredits: timetableCredits,
+        hasGrades: false,
+      );
+    }
+
+    double gpaWeightedSum = 0;
+    double gpaCreditSum = 0;
+    double earnedCreditSum = 0;
+    double scoreWeightedSum = 0;
+    double scoreCreditSum = 0;
+    double semCreditSum = 0;
+
+    for (final g in grades) {
+      final credit = _parseNum(g['credit']);
+      final fivePoint = _parseNum(g['fivePoint']);
+      final original = text(g, 'original');
+      final included = g['creditIncluded'] == true;
+      final gpaIncluded = g['gpaIncluded'] == true;
+      final id = text(g, 'id');
+      final sem = text(g, 'semester');
+      final xkkh = text(g, 'xkkh');
+      final semFromXkkh =
+          RegExp(
+            r'(\d{4}-\d{4}-[12])',
+          ).firstMatch(xkkh.isNotEmpty ? xkkh : id)?[1] ??
+          '';
+
+      // Check if passed for earned credits
+      final scoreVal = double.tryParse(original);
+      final isFailing =
+          original == '不合格' || (scoreVal != null && scoreVal < 60);
+      if (included && !isFailing && credit > 0) {
+        earnedCreditSum += credit;
+      }
+
+      // GPA calculation
+      if (gpaIncluded && credit > 0 && fivePoint >= 0) {
+        gpaWeightedSum += fivePoint * credit;
+        gpaCreditSum += credit;
+      }
+
+      // Average score calculation (from numerical scores)
+      if (gpaIncluded && credit > 0 && scoreVal != null && scoreVal >= 0) {
+        scoreWeightedSum += scoreVal * credit;
+        scoreCreditSum += credit;
+      }
+
+      // Semester credit calculation
+      final isCurrentSem =
+          currentSemester.isNotEmpty &&
+          (sem == currentSemester ||
+              semFromXkkh == currentSemester ||
+              id.contains(currentSemester) ||
+              xkkh.contains(currentSemester));
+      if (isCurrentSem && credit > 0) {
+        semCreditSum += credit;
+      }
+    }
+
+    // If timetableCredits > 0 (authoritative enrolled / timetable course credits),
+    // always prioritize it over partial or early grades in the current ongoing semester.
+    if (timetableCredits > 0) {
+      semCreditSum = timetableCredits;
+    }
+
+    // If semester credits not found directly in currentSemester grades, try matching by course names
+    if (semCreditSum == 0 && currentCourseNames.isNotEmpty) {
+      final courseCreditMap = <String, double>{};
+      for (final g in grades) {
+        final name = text(g, 'courseName').trim();
+        final cr = _parseNum(g['credit']);
+        if (name.isNotEmpty && cr > 0) {
+          courseCreditMap[name] = cr;
+          courseCreditMap[name
+                  .replaceAll(RegExp(r'[（\(].*?[）\)]'), '')
+                  .trim()] =
+              cr;
+        }
+      }
+      final matched = <String>{};
+      for (final rawName in currentCourseNames) {
+        final name = rawName.trim();
+        final clean = name.replaceAll(RegExp(r'[（\(].*?[）\)]'), '').trim();
+        if (matched.contains(name) ||
+            (clean.isNotEmpty && matched.contains(clean))) {
+          continue;
+        }
+        if (courseCreditMap.containsKey(name)) {
+          semCreditSum += courseCreditMap[name]!;
+          matched.add(name);
+        } else if (clean.isNotEmpty && courseCreditMap.containsKey(clean)) {
+          semCreditSum += courseCreditMap[clean]!;
+          matched.add(clean);
+        }
+      }
+    }
+
+    final finalGpa = gpaCreditSum > 0 ? (gpaWeightedSum / gpaCreditSum) : 0.0;
+    final finalAvgScore = scoreCreditSum > 0
+        ? (scoreWeightedSum / scoreCreditSum)
+        : 0.0;
+
+    return GradeStats(
+      gpa: finalGpa,
+      totalCredits: earnedCreditSum,
+      avgScore: finalAvgScore,
+      semesterCredits: semCreditSum,
+      hasGrades: true,
+    );
+  }
+}
+
+class MultiMetricItem {
+  final String value;
+  final String label;
+  final Color? valueColor;
+  final VoidCallback? onTap;
+  final String? tooltip;
+
+  const MultiMetricItem({
+    required this.value,
+    required this.label,
+    this.valueColor,
+    this.onTap,
+    this.tooltip,
+  });
+}
+
+class MultiMetricKpi extends StatefulWidget {
+  const MultiMetricKpi({
+    super.key,
+    required this.label,
+    required this.icon,
+    required this.items,
+    this.foot,
+    this.footOnTap,
+  });
+
+  final String label;
+  final String icon;
+  final List<MultiMetricItem> items;
+  final String? foot;
+  final VoidCallback? footOnTap;
+
+  @override
+  State<MultiMetricKpi> createState() => _MultiMetricKpiState();
+}
+
+class _MultiMetricKpiState extends State<MultiMetricKpi> {
+  int? hoveredIndex;
+  bool footHovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: paperCard,
+        border: Border.all(color: ink.withValues(alpha: .12)),
+        borderRadius: BorderRadius.circular(3),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  widget.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: blue,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              SvgPicture.asset(
+                'assets/icons/${widget.icon}.svg',
+                width: 17,
+                height: 17,
+                colorFilter: ColorFilter.mode(
+                  blue.withValues(alpha: .85),
+                  BlendMode.srcIn,
+                ),
+              ),
+            ],
+          ),
+          const Spacer(),
+          Row(
+            children: [
+              for (var i = 0; i < widget.items.length; i++) ...[
+                if (i > 0)
+                  Container(
+                    width: 1,
+                    height: 38,
+                    margin: const EdgeInsets.symmetric(horizontal: 2),
+                    color: ink.withValues(alpha: .08),
+                  ),
+                Expanded(child: _buildMetricItem(widget.items[i], i)),
+              ],
+            ],
+          ),
+          const Spacer(),
+          if (widget.foot != null && widget.foot!.isNotEmpty) ...[
+            Divider(height: 16, color: ink.withValues(alpha: .1)),
+            InkWell(
+              onTap: widget.footOnTap,
+              onHover: (v) {
+                if (mounted) setState(() => footHovered = v);
+              },
+              borderRadius: BorderRadius.circular(2),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        widget.foot!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: gold,
+                          decoration: (widget.footOnTap != null && footHovered)
+                              ? TextDecoration.underline
+                              : TextDecoration.none,
+                        ),
+                      ),
+                    ),
+                    if (widget.footOnTap != null)
+                      Text(
+                        '→',
+                        style: TextStyle(
+                          fontSize: 16,
+                          color: footHovered ? gold : blue,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMetricItem(MultiMetricItem item, int index) {
+    final canTap = item.onTap != null;
+    final isHovered = hoveredIndex == index;
+
+    final content = AnimatedContainer(
+      duration: const Duration(milliseconds: 150),
+      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
+      decoration: BoxDecoration(
+        color: isHovered && canTap
+            ? blue.withValues(alpha: .06)
+            : Colors.transparent,
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          SizedBox(
+            height: 28,
+            child: Center(
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  item.value,
+                  maxLines: 1,
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                    color: item.valueColor ?? blue,
+                    letterSpacing: -0.3,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 3),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              item.label,
+              maxLines: 1,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 10.5,
+                color: isHovered && canTap ? blue : ink,
+                fontWeight: isHovered && canTap
+                    ? FontWeight.bold
+                    : FontWeight.normal,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (!canTap) {
+      return item.tooltip != null
+          ? Tooltip(message: item.tooltip!, child: content)
+          : content;
+    }
+
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) {
+        if (mounted) setState(() => hoveredIndex = index);
+      },
+      onExit: (_) {
+        if (mounted) setState(() => hoveredIndex = null);
+      },
+      child: Tooltip(
+        message: item.tooltip ?? '',
+        waitDuration: const Duration(milliseconds: 500),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: item.onTap,
+            borderRadius: BorderRadius.circular(4),
+            child: content,
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class Kpi extends StatefulWidget {
@@ -3244,33 +5395,35 @@ class _KpiState extends State<Kpi> {
                       ],
                     ),
                   ),
-                  const Divider(height: 18),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          widget.foot,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: gold,
-                            decoration: active
-                                ? TextDecoration.underline
-                                : TextDecoration.none,
+                  if (widget.foot.isNotEmpty) ...[
+                    const Divider(height: 18),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            widget.foot,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: gold,
+                              decoration: active
+                                  ? TextDecoration.underline
+                                  : TextDecoration.none,
+                            ),
                           ),
                         ),
-                      ),
-                      AnimatedSlide(
-                        offset: active ? const Offset(.15, 0) : Offset.zero,
-                        duration: const Duration(milliseconds: 180),
-                        child: Text(
-                          '→',
-                          style: TextStyle(fontSize: 16, color: color),
+                        AnimatedSlide(
+                          offset: active ? const Offset(.15, 0) : Offset.zero,
+                          duration: const Duration(milliseconds: 180),
+                          child: Text(
+                            '→',
+                            style: TextStyle(fontSize: 16, color: color),
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
+                      ],
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -3547,10 +5700,7 @@ class SideSection extends StatelessWidget {
           Expanded(
             child: Container(height: 1, color: ink.withValues(alpha: .15)),
           ),
-          if (trailing != null) ...[
-            const SizedBox(width: 6),
-            trailing!,
-          ],
+          if (trailing != null) ...[const SizedBox(width: 6), trailing!],
         ],
       ),
       const SizedBox(height: 16),
@@ -3678,7 +5828,7 @@ class PageHead extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 Expanded(child: heading),
-                if (trailing != null) trailing!,
+                ?trailing,
               ],
             );
           }
@@ -3933,15 +6083,23 @@ class SemesterChoice {
   final String id, name;
 }
 
-List<SemesterChoice> semesterChoices(
-  List<Json> raw, {
-  bool includeAll = true,
-}) {
+List<SemesterChoice> semesterChoices(List<Json> raw, {bool includeAll = true}) {
   final map = <String, SemesterChoice>{};
   for (final s in raw) {
     final name = text(s, 'name'), id = semesterToId(name) ?? text(s, 'id');
     if (id.isEmpty) continue;
-    map[id] = SemesterChoice(id, semesterDisplay(id, name));
+    final yearMatch = RegExp(
+      r'(\d{4}-\d{4})',
+    ).firstMatch(name.isNotEmpty ? name : id);
+    final year = yearMatch != null
+        ? yearMatch.group(1)!
+        : (id.length >= 9 ? id.substring(0, 9) : id);
+    final tabName = id.endsWith('-1')
+        ? '$year秋冬'
+        : id.endsWith('-2')
+        ? '$year春夏'
+        : semesterDisplay(id, name);
+    map[id] = SemesterChoice(id, tabName);
   }
   if (map.isEmpty) {
     final current = academicSemester(beijing(DateTime.now()));
@@ -3971,11 +6129,444 @@ List<SemesterChoice> semesterChoices(
 }
 
 String semesterDisplay(String id, String name) {
+  final yearMatch = RegExp(
+    r'(\d{4}-\d{4})',
+  ).firstMatch(name.isNotEmpty ? name : id);
+  final year = yearMatch != null
+      ? yearMatch.group(1)!
+      : (id.length >= 9 ? id.substring(0, 9) : id);
+
+  if (name.contains('秋冬')) return '$year秋冬';
+  if (name.contains('春夏')) return '$year春夏';
+  if (name.contains('秋')) return '$year秋';
+  if (name.contains('冬')) return '$year冬';
+  if (name.contains('春')) return '$year春';
+  if (name.contains('夏')) return '$year夏';
+  if (name.contains('短')) return '$year短';
+
   final normalized = semesterToId(name) ?? id;
-  final year = normalized.length >= 9 ? normalized.substring(0, 9) : normalized;
-  if (normalized.endsWith('-1')) return '${year}秋冬';
-  if (normalized.endsWith('-2')) return '${year}春夏';
+  if (normalized.endsWith('-1')) return '$year秋冬';
+  if (normalized.endsWith('-2')) return '$year春夏';
   return name.isEmpty ? normalized : name;
+}
+
+String cleanCourseExtraSuffix(String n) {
+  var s = n.trim();
+  s = s.replaceAll('(', '（').replaceAll(')', '）');
+  String prev;
+  do {
+    prev = s;
+    // 仅去除末尾的学期标识，例如（2024-2025-1）、（2024-2025秋冬）、（2024-2025学年秋学期）
+    s = s.replaceAll(RegExp(r'（\d{4}-\d{4}[^）]*）$'), '').trim();
+    // 仅去除末尾的选课代码/教学班，例如（061B0170-01）、（CS101-01）、（教学班01）、（01班）
+    s = s
+        .replaceAll(
+          RegExp(r'（(?:[A-Za-z0-9_]+-[A-Za-z0-9_]+|教学班\d+|\d+班)）$'),
+          '',
+        )
+        .trim();
+  } while (s != prev);
+  return s;
+}
+
+String normalizeCourseName(String n) {
+  var s = cleanCourseExtraSuffix(n);
+
+  // 统一括号为（）并去除多余空白
+  s = s
+      .replaceAll('(', '（')
+      .replaceAll(')', '）')
+      .replaceAll(RegExp(r'\s+'), '');
+
+  // 1系列精确对齐为（1），绝不混淆
+  s = s.replaceAll(RegExp(r'（(?:1|一|Ⅰ|I)）'), '（1）');
+  s = s.replaceAll(
+    RegExp(r'(?:(?<=[\u4e00-\u9fa5\）\)])|(?<=^))(?:Ⅰ|I|1|一)$'),
+    '（1）',
+  );
+
+  // 2系列精确对齐为（2），绝不混淆
+  s = s.replaceAll(RegExp(r'[（\(](?:2|二|Ⅱ|II)[）\)]'), '（2）');
+  s = s.replaceAll(
+    RegExp(r'(?:(?<=[\u4e00-\u9fa5\）\)])|(?<=^))(?:Ⅱ|II|2|二)$'),
+    '（2）',
+  );
+
+  // 3系列精确对齐为（3），绝不混淆
+  s = s.replaceAll(RegExp(r'[（\(](?:3|三|Ⅲ|III)[）\)]'), '（3）');
+  s = s.replaceAll(
+    RegExp(r'(?:(?<=[\u4e00-\u9fa5\）\)])|(?<=^))(?:Ⅲ|III|3|三)$'),
+    '（3）',
+  );
+
+  // 4系列精确对齐为（4），绝不混淆
+  s = s.replaceAll(RegExp(r'[（\(](?:4|四|Ⅳ|IV)[）\)]'), '（4）');
+  s = s.replaceAll(
+    RegExp(r'(?:(?<=[\u4e00-\u9fa5\）\)])|(?<=^))(?:Ⅳ|IV|4|四)$'),
+    '（4）',
+  );
+
+  // 5系列精确对齐为（5），绝不混淆
+  s = s.replaceAll(RegExp(r'[（\(](?:5|五|Ⅴ|V)[）\)]'), '（5）');
+  s = s.replaceAll(
+    RegExp(r'(?:(?<=[\u4e00-\u9fa5\）\)])|(?<=^))(?:Ⅴ|V|5|五)$'),
+    '（5）',
+  );
+
+  s = s.replaceAll(RegExp(r'\s+'), '');
+  return s;
+}
+
+String cleanCourseBaseName(String n) => normalizeCourseName(n);
+
+String formatGradeBadge(String score, String gpa) {
+  final s = score.trim();
+  final g = double.tryParse(gpa.trim());
+  final isNumScore = double.tryParse(s) != null;
+  final scoreDisplay = isNumScore ? '$s分' : s;
+
+  if (scoreDisplay.isNotEmpty && g != null && g >= 0) {
+    return '$scoreDisplay / $gpa';
+  } else if (scoreDisplay.isNotEmpty) {
+    return scoreDisplay;
+  } else if (g != null && g >= 0) {
+    return '绩点 $gpa';
+  }
+  return '';
+}
+
+Future<Json> loadCourseOverview(
+  AppServices s,
+  String semester, {
+  bool refresh = false,
+  List<Json>? semestersOverride,
+  List<Json>? rawCoursesOverride,
+  List<TimetableEntry>? timetableOverride,
+}) async {
+  final semesters =
+      semestersOverride ?? await s.campus.semesters(refresh: refresh);
+  final rawCourses =
+      rawCoursesOverride ?? await s.campus.courses(refresh: refresh);
+
+  List<Json> allGrades = [];
+  try {
+    allGrades = await s.campus.grades('', refresh: refresh);
+  } catch (_) {}
+  if (allGrades.isEmpty) {
+    try {
+      final cached = await s.db.get('cache', 'grades:');
+      if (cached != null) allGrades = rows(cached['items']);
+    } catch (_) {}
+  }
+
+  List<Json> allEnrolled = [];
+  try {
+    allEnrolled = await s.campus.enrolledCourses('all', refresh: refresh);
+  } catch (_) {}
+  if (allEnrolled.isEmpty) {
+    try {
+      final cached = await s.db.get('cache', 'enrolled_courses:all');
+      if (cached != null) allEnrolled = rows(cached['items']);
+    } catch (_) {}
+  }
+  if (allEnrolled.isEmpty) {
+    try {
+      allEnrolled = await s.campus.enrolledCourses(semester, refresh: refresh);
+    } catch (_) {}
+  }
+
+  List<TimetableEntry> ttEntries = timetableOverride ?? [];
+  if (timetableOverride == null) {
+    try {
+      ttEntries = await s.campus.timetable(semester, refresh: refresh);
+    } catch (_) {}
+  }
+  if (ttEntries.isEmpty) {
+    try {
+      final cached = await s.db.get('cache', 'timetable:$semester');
+      if (cached != null) {
+        ttEntries = rows(cached['items']).map(TimetableEntry.fromJson).toList();
+      }
+    } catch (_) {}
+  }
+
+  final semesterIdToZdbkCode = <String, String>{};
+  for (final raw in rows(semesters)) {
+    final rawId = text(raw, 'id').trim();
+    final sName = text(raw, 'name').trim();
+    final zdbkCode = semesterToId(sName) ?? semesterToId(rawId);
+    if (rawId.isNotEmpty && zdbkCode != null) {
+      semesterIdToZdbkCode[rawId] = zdbkCode;
+    }
+  }
+
+  // Authoritative course list from 教务网 (ZDBK)
+  final zdbkCoursesMap = <String, Map<String, dynamic>>{};
+  void addOrUpdateZdbkCourse({
+    required String name,
+    required String semester,
+    double credit = 0.0,
+    String teacher = '',
+    String xkkh = '',
+    String location = '',
+    String scheduleTime = '',
+    String score = '',
+    String gpa = '',
+  }) {
+    final rawName = cleanCourseExtraSuffix(name);
+    if (rawName.isEmpty) return;
+    final normName = normalizeCourseName(rawName);
+    final normSem = semesterToId(semester) ?? semester;
+    final key = '$normSem|$normName';
+
+    if (!zdbkCoursesMap.containsKey(key)) {
+      zdbkCoursesMap[key] = {
+        'name': rawName,
+        'semesterId': normSem,
+        'semester': normSem,
+        'credit': credit,
+        'teacher': teacher,
+        'xkkh': xkkh,
+        'location': location,
+        'scheduleTime': scheduleTime,
+        if (score.isNotEmpty) 'score': score,
+        if (score.isNotEmpty) 'original': score,
+        if (gpa.isNotEmpty) 'gpa': gpa,
+        if (gpa.isNotEmpty) 'fivePoint': gpa,
+      };
+    } else {
+      final existing = zdbkCoursesMap[key]!;
+      if ((existing['credit'] as num? ?? 0) <= 0 && credit > 0) {
+        existing['credit'] = credit;
+      }
+      if (text(existing, 'teacher').isEmpty && teacher.isNotEmpty) {
+        existing['teacher'] = teacher;
+      }
+      if (text(existing, 'xkkh').isEmpty && xkkh.isNotEmpty) {
+        existing['xkkh'] = xkkh;
+      }
+      if (text(existing, 'location').isEmpty && location.isNotEmpty) {
+        existing['location'] = location;
+      }
+      if (text(existing, 'scheduleTime').isEmpty && scheduleTime.isNotEmpty) {
+        existing['scheduleTime'] = scheduleTime;
+      }
+      if (score.isNotEmpty) {
+        existing['score'] = score;
+        existing['original'] = score;
+      }
+      if (gpa.isNotEmpty) {
+        existing['gpa'] = gpa;
+        existing['fivePoint'] = gpa;
+      }
+    }
+  }
+
+  // 1. Ingest enrolled courses from ZDBK (考签/已选课程)
+  for (final e in allEnrolled) {
+    final n = text(e, 'courseName', text(e, 'name')).trim();
+    final sem = text(e, 'semester').trim();
+    final cr = double.tryParse('${e['credit']}') ?? 0.0;
+    final teacher = text(e, 'teacher').trim();
+    final xkkh = text(e, 'xkkh').trim();
+    final loc = text(e, 'location').trim();
+    addOrUpdateZdbkCourse(
+      name: n,
+      semester: sem.isNotEmpty ? sem : semester,
+      credit: cr,
+      teacher: teacher,
+      xkkh: xkkh,
+      location: loc,
+    );
+  }
+
+  // 2. Ingest timetable entries from ZDBK (教务网课表)
+  for (final e in ttEntries) {
+    final sem = e.semester.trim().isNotEmpty ? e.semester.trim() : semester;
+    final weekText = e.weeks.isNotEmpty ? '${compressWeeks(e.weeks)} 周' : '';
+    final subText = e.subSemester.isNotEmpty ? '${e.subSemester} ' : '';
+    final timeStr =
+        '周${_weekdayName(e.weekday)} ${e.startSection}-${e.endSection}节 ($subText$weekText)';
+    addOrUpdateZdbkCourse(
+      name: e.courseName,
+      semester: sem,
+      credit: e.credit,
+      teacher: e.teacher,
+      xkkh: e.id,
+      location: e.location,
+      scheduleTime: timeStr,
+    );
+  }
+
+  // 3. Ingest cached timetables from DB
+  try {
+    final cachedTtIds = await s.db.ids('cache', prefix: 'timetable:');
+    for (final cid in cachedTtIds) {
+      final cItem = await s.db.get('cache', cid);
+      final semFromCid = cid.replaceFirst('timetable:', '').trim();
+      if (cItem != null && cItem['items'] is List) {
+        for (final row in rows(cItem['items'])) {
+          final tName = text(row, 'courseName').trim();
+          final tTeacher = text(row, 'teacher').trim();
+          final tCredit = double.tryParse('${row['credit']}') ?? 0.0;
+          final tXkkh = text(row, 'classCode', text(row, 'xkkh')).trim();
+          final tLoc = text(row, 'location', text(row, 'room')).trim();
+          final tSem = semFromCid.isNotEmpty ? semFromCid : semester;
+          if (tName.isNotEmpty) {
+            addOrUpdateZdbkCourse(
+              name: tName,
+              semester: tSem,
+              credit: tCredit,
+              teacher: tTeacher,
+              xkkh: tXkkh,
+              location: tLoc,
+            );
+          }
+        }
+      }
+    }
+  } catch (_) {}
+
+  // 4. Ingest historical grades from ZDBK (全量成绩库)
+  for (final g in allGrades) {
+    final n = text(g, 'courseName').trim();
+    final sem = text(g, 'semester').trim();
+    final cr = double.tryParse('${g['credit']}') ?? 0.0;
+    final teacher = text(g, 'teacher').trim();
+    final original = text(g, 'original', text(g, 'score')).trim();
+    final fivePoint = text(
+      g,
+      'fivePoint',
+      text(g, 'gpa', text(g, 'jd')),
+    ).trim();
+    final xkkh = text(g, 'classCode', text(g, 'xkkh')).trim();
+    addOrUpdateZdbkCourse(
+      name: n,
+      semester: sem,
+      credit: cr,
+      teacher: teacher,
+      xkkh: xkkh,
+      score: original,
+      gpa: fivePoint,
+    );
+  }
+
+  // 5. Match each unified 教务网 course with 学在浙大 (rawCourses)
+  final courses = <Json>[];
+  if (zdbkCoursesMap.isNotEmpty) {
+    for (final entry in zdbkCoursesMap.entries) {
+      final zItem = entry.value;
+      final zName = text(zItem, 'name');
+      final zNorm = normalizeCourseName(zName);
+      final zSem = text(zItem, 'semesterId');
+      final zXkkh = text(zItem, 'xkkh');
+
+      Json? matchedLearning;
+
+      // 5.1 Match by courseCode from xkkh
+      if (zXkkh.isNotEmpty) {
+        for (final lc in rawCourses) {
+          final cCode = text(lc, 'courseCode').trim();
+          if (cCode.isNotEmpty && zXkkh.contains(cCode)) {
+            final lcSemId = text(lc, 'semesterId');
+            final lcZdbkSem =
+                semesterIdToZdbkCode[lcSemId] ?? semesterToId(lcSemId) ?? '';
+            if (lcZdbkSem.isEmpty || lcZdbkSem == zSem) {
+              matchedLearning = lc;
+              break;
+            }
+          }
+        }
+      }
+
+      // 5.2 Match by normalized name and semester
+      if (matchedLearning == null) {
+        for (final lc in rawCourses) {
+          final lcName = text(lc, 'name').trim();
+          final lcNorm = normalizeCourseName(lcName);
+          if (lcNorm == zNorm) {
+            final lcSemId = text(lc, 'semesterId');
+            final lcZdbkSem =
+                semesterIdToZdbkCode[lcSemId] ?? semesterToId(lcSemId) ?? '';
+            if (lcZdbkSem == zSem) {
+              matchedLearning = lc;
+              break;
+            }
+          }
+        }
+      }
+
+      // 5.3 Match by normalized name if only 1 candidate exists
+      if (matchedLearning == null) {
+        final candidates = rawCourses.where((lc) {
+          return normalizeCourseName(text(lc, 'name').trim()) == zNorm;
+        }).toList();
+        if (candidates.length == 1) {
+          matchedLearning = candidates.first;
+        }
+      }
+
+      final isCreated =
+          matchedLearning != null && text(matchedLearning, 'id').isNotEmpty;
+      courses.add({
+        ...zItem,
+        'id': isCreated ? text(matchedLearning, 'id') : '',
+        'learningZjuCreated': isCreated,
+        if (isCreated && text(matchedLearning, 'teachingClassName').isNotEmpty)
+          'teachingClassName': text(matchedLearning, 'teachingClassName'),
+        if (text(zItem, 'teacher').isEmpty &&
+            isCreated &&
+            text(matchedLearning, 'teacher').isNotEmpty)
+          'teacher': text(matchedLearning, 'teacher'),
+      });
+    }
+  } else {
+    // Fallback if no ZDBK course data is found at all (e.g. offline unit tests)
+    for (final c in rawCourses) {
+      courses.add({...c, 'learningZjuCreated': text(c, 'id').isNotEmpty});
+    }
+  }
+
+  // 6. Merge semesters so tabs cover all historical semesters in 教务网
+  final existingSemIds = <String>{
+    for (final s in rows(semesters)) text(s, 'id'),
+    for (final s in rows(semesters))
+      if (semesterToId(text(s, 'name')) != null) semesterToId(text(s, 'name'))!,
+  };
+  final mergedSemesters = [...rows(semesters)];
+  for (final c in courses) {
+    final sId = text(c, 'semesterId', text(c, 'semester')).trim();
+    if (sId.isNotEmpty && !existingSemIds.contains(sId)) {
+      existingSemIds.add(sId);
+      final yearMatch = RegExp(r'(\d{4}-\d{4})').firstMatch(sId);
+      final year = yearMatch != null ? yearMatch.group(1)! : sId;
+      final semLabel = sId.endsWith('-1')
+          ? '$year学年秋冬学期'
+          : (sId.endsWith('-2') ? '$year学年春夏学期' : sId);
+      mergedSemesters.add({
+        'id': sId,
+        'name': semLabel,
+        'isActive': sId == semester,
+      });
+    }
+  }
+
+  final time = await s.campus.oldestUpdatedAt(
+    cacheKeys: [
+      'semesters',
+      'courses',
+      'grades:',
+      'enrolled_courses:all',
+      'timetable:$semester',
+    ],
+  );
+
+  return {
+    'semesters': mergedSemesters,
+    'courses': courses,
+    'grades': allGrades,
+    if (time != null) '_updatedAt': time.toIso8601String(),
+  };
 }
 
 int? deadlineMs(Json a) {
@@ -4065,8 +6656,9 @@ String compressWeeks(List<int> weeks) {
 
 String fileKind(String name) {
   final ext = name.toLowerCase().split('.').last;
-  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].contains(ext))
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].contains(ext)) {
     return 'image';
+  }
   if (['txt', 'md', 'json', 'csv'].contains(ext)) return 'text';
   if (ext == 'pdf') return 'pdf';
   if (['doc', 'docx'].contains(ext)) return 'word';

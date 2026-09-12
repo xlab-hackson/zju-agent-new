@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
 import 'package:html/parser.dart' as html;
@@ -22,6 +23,17 @@ class CampusService {
   static const zdbkBase = 'https://zdbk.zju.edu.cn/jwglxt';
   static const cacheValidity = Duration(days: 1);
   final Set<String> stale = {};
+  final Map<String, Future<List<Json>>> _inflight = {};
+  final StreamController<String> _cacheChanges =
+      StreamController<String>.broadcast();
+
+  /// Emitted after a cache record is successfully replaced by fresh data.
+  /// Consumers can reload from cache without starting another forced request.
+  Stream<String> get cacheChanges => _cacheChanges.stream;
+
+  void _notifyCacheChanged(String key) {
+    if (!_cacheChanges.isClosed) _cacheChanges.add(key);
+  }
 
   DateTime? _cacheTime(Json? value) {
     if (value == null) return null;
@@ -65,6 +77,23 @@ class CampusService {
       stale.remove(key);
       return rows(cache!['items']);
     }
+
+    final existing = _inflight[key];
+    if (existing != null) return existing;
+
+    late final Future<List<Json>> request;
+    request = _loadCached(key, cache, fetch).whenComplete(() {
+      if (identical(_inflight[key], request)) _inflight.remove(key);
+    });
+    _inflight[key] = request;
+    return request;
+  }
+
+  Future<List<Json>> _loadCached(
+    String key,
+    Json? cache,
+    Future<List<Json>> Function() fetch,
+  ) async {
     try {
       final items = await fetch();
       stale.remove(key);
@@ -72,6 +101,7 @@ class CampusService {
         'items': items,
         'updatedAt': DateTime.now().toUtc().toIso8601String(),
       });
+      _notifyCacheChanged(key);
       return items;
     } on AppError catch (e) {
       if (cache == null ||
@@ -110,23 +140,40 @@ class CampusService {
             'classify_type': 'recently_started',
             'display_studio_list': false,
           }),
-          'fields': 'id,name,semester_id,course_attributes',
+          'fields':
+              'id,name,course_code,credit,credits,semester_id,course_attributes,instructors,instructors.name,teacher_name,teachers',
           'page': '1',
           'page_size': '1000',
         },
       );
       final j = await session.json('courses', url.toString());
-      return rows(j['courses'])
-          .map(
-            (c) => {
-              'id': '${c['id']}',
-              'name': c['name'],
-              'semesterId': '${c['semester_id']}',
-              'teachingClassName':
-                  (c['course_attributes'] as Map?)?['teaching_class_name'],
-            },
-          )
-          .toList();
+      return rows(j['courses']).map((c) {
+        final instructors = rows(c['instructors']);
+        final teacherName = instructors.isNotEmpty
+            ? instructors
+                  .map((i) => text(i, 'name'))
+                  .where((n) => n.isNotEmpty)
+                  .join('、')
+            : text(
+                c,
+                'teacher_name',
+                text(c, 'teacher', text(c, 'instructor')),
+              );
+        return {
+          'id': '${c['id']}',
+          'name': c['name'],
+          'courseCode': c['course_code'],
+          'credit':
+              double.tryParse(
+                '${c['credit'] ?? c['credits'] ?? (c['course_attributes'] as Map?)?['credit'] ?? (c['course_attributes'] as Map?)?['xf'] ?? 0}',
+              ) ??
+              0.0,
+          'semesterId': '${c['semester_id']}',
+          'teachingClassName':
+              (c['course_attributes'] as Map?)?['teaching_class_name'],
+          if (teacherName.isNotEmpty) 'teacher': teacherName,
+        };
+      }).toList();
     }, refresh: refresh);
     if (semesterId == null) return all;
     final ids = (await semesters(refresh: refresh))
@@ -196,12 +243,13 @@ class CampusService {
   Future<List<Json>> assignments({
     String? courseId,
     String? semesterId,
+    List<Json>? courseCandidates,
     bool refresh = false,
   }) async {
-    final selected = (await courses(
-      semesterId: semesterId,
-      refresh: refresh,
-    )).where((c) => courseId == null || c['id'] == courseId);
+    final selected =
+        (courseCandidates ??
+                await courses(semesterId: semesterId, refresh: refresh))
+            .where((c) => courseId == null || c['id'] == courseId);
     final tasks = selected.map((c) async {
       try {
         return await cached('assignments:${c['id']}', () async {
@@ -281,13 +329,129 @@ class CampusService {
           'captcha_value': '',
         },
       );
+      final courseCreditMap = <String, double>{};
+      for (final key in j.keys) {
+        if (key == 'kbList') continue;
+        for (final c in rows(j[key])) {
+          final name = text(
+            c,
+            'kcmc',
+            text(c, 'KCMC', text(c, 'courseName')),
+          ).trim();
+          final xf =
+              double.tryParse(
+                text(
+                  c,
+                  'xf',
+                  text(c, 'XF', text(c, 'cd_xf', text(c, 'credit'))),
+                ),
+              ) ??
+              0.0;
+          if (name.isNotEmpty && xf > 0) {
+            courseCreditMap[name] = xf;
+            courseCreditMap[name
+                    .replaceAll(RegExp(r'[（\(].*?[）\)]'), '')
+                    .trim()] =
+                xf;
+          }
+        }
+      }
       for (final row in rows(j['kbList'])) {
-        final e = parseTimetable(row, semester);
+        final e = parseTimetable(row, semester, creditMap: courseCreditMap);
         if (e != null) entries.add(e);
+      }
+      for (final s in rows(j['sjkList'])) {
+        final name = text(s, 'kcmc', text(s, 'KCMC')).trim();
+        final xf =
+            double.tryParse(text(s, 'xf', text(s, 'XF', text(s, 'credit')))) ??
+            0.0;
+        if (name.isNotEmpty) {
+          entries.add(
+            TimetableEntry(
+              id: 'sjk-$name',
+              courseName: name,
+              weekday: 0,
+              startSection: 0,
+              endSection: 0,
+              teacher: text(s, 'xm', text(s, 'XM')),
+              location: text(s, 'qsjsz', text(s, 'cdmc')),
+              semester: semester,
+              subSemester: text(s, 'xxq', sub),
+              credit: xf,
+              weeks: const [],
+            ),
+          );
+        }
       }
     }
     return mergeTimetable(entries).map((e) => e.toJson()).toList();
   }, refresh: refresh)).map(TimetableEntry.fromJson).toList();
+  Future<List<Json>> enrolledCourses(
+    String semester, {
+    bool refresh = false,
+  }) => cached('enrolled_courses:$semester', () async {
+    final credential = await session.secrets.read('campus');
+    final j = await session.json(
+      'zdbk',
+      '$zdbkBase/xskscx/kscx_cxXsgrksIndex.html?doType=query&gnmkdm=N509070&layout=default&su=${Uri.encodeComponent(text(credential ?? {}, 'username'))}',
+      method: 'POST',
+      data: {
+        '_search': 'false',
+        'queryModel.showCount': '5000',
+        'queryModel.currentPage': '1',
+        'queryModel.sortName': 'xkkh',
+        'queryModel.sortOrder': 'desc',
+        'time': '0',
+      },
+    );
+    final result = <Json>[];
+    final seen = <String>{};
+    final normSem = semesterToId(semester) ?? semester;
+    for (final e in rows(j['items']).where(
+      (r) =>
+          normSem == 'all' ||
+          normSem.isEmpty ||
+          semester == 'all' ||
+          semester.isEmpty ||
+          text(r, 'xkkh').contains(normSem) ||
+          text(r, 'xkkh').contains(semester),
+    )) {
+      final rawName = text(
+        e,
+        'kcmc',
+        text(e, 'KCMC'),
+      ).replaceAll('(', '（').replaceAll(')', '）').trim();
+      if (rawName.isEmpty) continue;
+      final xkkh = text(e, 'xkkh');
+      final sem =
+          RegExp(r'(\d{4}-\d{4}-[12])').firstMatch(xkkh)?[1] ?? semester;
+      final key = '$sem|$rawName';
+      if (seen.contains(key)) continue;
+      seen.add(key);
+      final credit =
+          double.tryParse(text(e, 'xf', text(e, 'XF', text(e, 'credit')))) ??
+          0.0;
+      final teacher = text(
+        e,
+        'xm',
+        text(e, 'jsxm', text(e, 'jsxx', text(e, 'teacher'))),
+      ).trim();
+      result.add({
+        'id': xkkh.isNotEmpty ? xkkh : rawName,
+        'name': rawName,
+        'courseName': rawName,
+        'credit': credit,
+        'semester': sem,
+        'xkkh': xkkh,
+        if (teacher.isNotEmpty) 'teacher': teacher,
+        'time': parseExamTime(text(e, 'kssj')),
+        'midtermTime': parseExamTime(text(e, 'qzkssj')),
+        'location': text(e, 'jsmc'),
+        'seat': text(e, 'zwxh'),
+      });
+    }
+    return result;
+  }, refresh: refresh);
   Future<List<Json>> exams(
     String semester, {
     bool refresh = false,
@@ -307,9 +471,15 @@ class CampusService {
       },
     );
     final result = <Json>[];
-    for (final e in rows(
-      j['items'],
-    ).where((r) => text(r, 'xkkh').contains(semester))) {
+    for (final e in rows(j['items']).where(
+      (r) =>
+          semester == 'all' ||
+          semester.isEmpty ||
+          text(r, 'xkkh').contains(semester),
+    )) {
+      final credit =
+          double.tryParse(text(e, 'xf', text(e, 'XF', text(e, 'credit')))) ??
+          0.0;
       for (final prefix in ['', 'qz']) {
         if (text(e, '${prefix}kssj').isEmpty) continue;
         result.add({
@@ -319,6 +489,7 @@ class CampusService {
           'location': e['${prefix}jsmc'],
           'seat': e['${prefix}zwxh'],
           'semester': semester,
+          'credit': credit,
         });
       }
     }
@@ -339,20 +510,36 @@ class CampusService {
       r,
     ) {
       final grade = text(r, 'CJ', text(r, 'cj')),
-          id = text(r, 'KCH', text(r, 'xkkh'));
+          id = text(r, 'KCH', text(r, 'xkkh')),
+          xkkh = text(r, 'xkkh'),
+          teacher = text(
+            r,
+            'JSXM',
+            text(
+              r,
+              'jsxm',
+              text(r, 'xm', text(r, 'XM', text(r, 'skjs', text(r, 'rkjs')))),
+            ),
+          );
+      final semFromXkkh =
+          RegExp(r'(\d{4}-\d{4}-[12])').firstMatch(xkkh)?[1] ?? semester;
       final included =
           !['弃修', '待录', '缓考', '无效'].contains(grade) &&
           text(r, 'BZ', text(r, 'bz')) != '弃修';
       return {
         'id': id,
+        'xkkh': xkkh,
         'courseName': r['KCMC'] ?? r['kcmc'],
         'original': grade,
+        'score': grade,
         'credit': r['XF'] ?? r['xf'],
         'fivePoint': r['JD'] ?? r['jd'],
-        'semester': semester,
+        'gpa': r['JD'] ?? r['jd'],
+        'semester': semFromXkkh,
         'creditIncluded': included,
         'gpaIncluded':
             included && !['合格', '不合格'].contains(grade) && !id.contains('xtwkc'),
+        if (teacher.isNotEmpty) 'teacher': teacher,
       };
     }).toList();
   }, refresh: refresh);
@@ -393,6 +580,7 @@ class CampusService {
           'items': parsed,
           'updatedAt': DateTime.now().toUtc().toIso8601String(),
         });
+        _notifyCacheChanged(key);
         stale.remove(key);
       } catch (_) {
         stale.add(key);
@@ -416,13 +604,18 @@ class CampusService {
       final time = _cacheTime(await db.get('cache', 'notices:$source'));
       if (time != null) updated.add(time);
     }
+    final updatedAt = updated.isNotEmpty
+        ? updated.reduce((a, b) => a.isBefore(b) ? a : b).toIso8601String()
+        : null;
+    final timestampFields = updatedAt == null
+        ? const <String, dynamic>{}
+        : <String, dynamic>{'updatedAt': updatedAt, '_updatedAt': updatedAt};
     return {
       'items': items,
       'failures': failures,
-      if (updated.isNotEmpty)
-        'updatedAt': updated
-            .reduce((a, b) => a.isBefore(b) ? a : b)
-            .toIso8601String(),
+      // Keep the public service field for Agent callers while exposing the
+      // page-wide timestamp convention used by PageHead.
+      ...timestampFields,
     };
   }
 
@@ -443,6 +636,7 @@ class CampusService {
           'updatedAt': DateTime.now().toUtc().toIso8601String(),
         };
         await db.put('calendars', semester, config);
+        _notifyCacheChanged('calendar:$semester');
         stale.remove('calendar:$semester');
         return config;
       }
@@ -476,12 +670,15 @@ class CampusService {
   Future<Json> upcoming({DateTime? now, bool refresh = false}) async {
     final wall = beijing(now ?? DateTime.now()),
         end = beijing(now ?? DateTime.now()).add(const Duration(hours: 48));
+    final allSemesters = await semesters(refresh: refresh);
+    final allCourses = await courses(refresh: refresh);
     final all = <Json>[];
     Json? firstDateInfo;
     final calendars = <String, Json>{};
     final timetables = <String, List<TimetableEntry>>{};
     final examsBySemester = <String, List<Json>>{};
     final assignmentsBySemester = <String, List<Json>>{};
+    final coursesBySemester = <String, List<Json>>{};
     for (var i = 0; i < 3; i++) {
       final current = day(wall).add(Duration(days: i)),
           semester = academicSemester(current),
@@ -497,8 +694,13 @@ class CampusService {
             semester,
             refresh: refresh,
           ),
+          selectedCourses = coursesBySemester[semester] ??= await courses(
+            semesterId: semester,
+            refresh: false,
+          ),
           work = assignmentsBySemester[semester] ??= await assignments(
             semesterId: semester,
+            courseCandidates: selectedCourses,
             refresh: refresh,
           );
       final info = dateInfo(current, config);
@@ -510,16 +712,47 @@ class CampusService {
           finish = DateTime.parse('${e['date']}T${e['endTime']}:00Z');
       return !finish.isBefore(wall) && !start.isAfter(end);
     }).toList();
+    final assignmentMap = <String, Json>{};
+    final assignmentCourseIds = <String>{};
+    for (final list in assignmentsBySemester.values) {
+      for (final assignment in list) {
+        final courseId = text(assignment, 'courseId').trim();
+        if (courseId.isNotEmpty) assignmentCourseIds.add(courseId);
+        final key = '$courseId|${text(assignment, 'id')}';
+        assignmentMap[key] = assignment;
+      }
+    }
+    for (final list in coursesBySemester.values) {
+      for (final course in list) {
+        final courseId = text(course, 'id').trim();
+        if (courseId.isNotEmpty) assignmentCourseIds.add(courseId);
+      }
+    }
+    final currentSemester = academicSemester(wall);
     return {
       'now': wall.toIso8601String(),
       'dateInfo': firstDateInfo ?? {},
       'events': events,
       'assignments48h': events.where((e) => e['type'] == 'assignment').toList(),
+      'assignments': assignmentMap.values.toList(),
+      'assignmentCourseIds': assignmentCourseIds.toList(),
+      'currentExams': examsBySemester[currentSemester] ?? const <Json>[],
+      'courses': allCourses,
+      'semesters': allSemesters,
+      'currentTimetable':
+          (timetables[currentSemester] ?? const <TimetableEntry>[])
+              .map((entry) => entry.toJson())
+              .toList(),
+      'semesterIds': calendars.keys.toList(),
     };
   }
 }
 
-TimetableEntry? parseTimetable(Json r, String semester) {
+TimetableEntry? parseTimetable(
+  Json r,
+  String semester, {
+  Map<String, double> creditMap = const {},
+}) {
   if (text(r, 'sfyjskc') == '1') return null;
   final m = RegExp(
     r'(.*?)<br>(.*?)<br>(.*?)<br>(.*?)zwf',
@@ -528,9 +761,18 @@ TimetableEntry? parseTimetable(Json r, String semester) {
   final start = integer(r['djj']), weekday = integer(r['xqj']);
   if (start < 1 || weekday < 1 || weekday > 7) return null;
   final parity = text(r, 'dsz');
+  final courseName = m[1]!.trim().replaceAll('(', '（').replaceAll(')', '）');
+  final cleanName = courseName.replaceAll(RegExp(r'[（\(].*?[）\)]'), '').trim();
+  final credit =
+      creditMap[courseName] ??
+      creditMap[cleanName] ??
+      double.tryParse(
+        text(r, 'xf', text(r, 'XF', text(r, 'cd_xf', text(r, 'credit')))),
+      ) ??
+      0.0;
   return TimetableEntry(
     id: '${m[1]}-$weekday-$start',
-    courseName: m[1]!.trim().replaceAll('(', '（').replaceAll(')', '）'),
+    courseName: courseName,
     weekday: weekday,
     startSection: start,
     endSection: start + integer(r['skcd'], 1) - 1,
@@ -538,6 +780,7 @@ TimetableEntry? parseTimetable(Json r, String semester) {
     location: m[4]!.trim(),
     semester: semester,
     subSemester: text(r, 'xxq'),
+    credit: credit,
     weeks: parity == '0'
         ? [1, 3, 5, 7, 9, 11, 13, 15]
         : parity == '1'

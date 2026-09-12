@@ -1,3 +1,5 @@
+export 'page_context.dart';
+
 typedef Json = Map<String, dynamic>;
 
 class AppError implements Exception {
@@ -45,10 +47,12 @@ class TimetableEntry {
     this.semester = '',
     this.subSemester = '',
     this.weeks = const [],
+    this.credit = 0.0,
   });
   final String id, courseName, teacher, location, semester, subSemester;
   final int weekday, startSection, endSection;
   final List<int> weeks;
+  final double credit;
   factory TimetableEntry.fromJson(Json j) => TimetableEntry(
     id: text(j, 'id'),
     courseName: text(j, 'courseName'),
@@ -60,6 +64,9 @@ class TimetableEntry {
     semester: text(j, 'semester'),
     subSemester: text(j, 'subSemester'),
     weeks: (j['weeks'] as List? ?? []).map((e) => integer(e)).toList(),
+    credit: (j['credit'] is num
+        ? (j['credit'] as num).toDouble()
+        : double.tryParse('${j['credit'] ?? j['xf'] ?? 0}') ?? 0.0),
   );
   Json toJson() => {
     'id': id,
@@ -72,6 +79,7 @@ class TimetableEntry {
     'semester': semester,
     'subSemester': subSemester,
     'weeks': weeks,
+    'credit': credit,
   };
 }
 
@@ -101,8 +109,10 @@ List<TimetableEntry> mergeTimetable(List<TimetableEntry> entries) {
       result.add(e);
     } else {
       final p = result[i];
+      final maxCredit = e.credit > p.credit ? e.credit : p.credit;
       result[i] = TimetableEntry.fromJson({
         ...p.toJson(),
+        'credit': maxCredit,
         'endSection': e.endSection > p.endSection ? e.endSection : p.endSection,
       });
     }

@@ -40,14 +40,22 @@ Future<Json> loadPromptCatalog() async {
 }
 
 class AgentService {
-  AgentService(this.campus, this.files, this.guide, {ModelClient? model})
-    : model = model ?? ModelClient();
+  AgentService(
+    this.campus,
+    this.files,
+    this.guide, {
+    ModelClient? model,
+    this.getPageContext,
+  }) : model = model ?? ModelClient();
   final CampusService campus;
   final FileService files;
   final GuideIndex guide;
   final ModelClient model;
+  final PageContext? Function()? getPageContext;
   AgentDatabase get db => campus.db;
   final Map<String, CancelToken> _active = {};
+  final Map<String, PageContext?> _conversationContexts = {};
+  String? _currentConversationId;
   void cancel(String id) => _active[id]?.cancel();
   void cancelAll() {
     for (final token in _active.values) {
@@ -77,6 +85,7 @@ class AgentService {
 
   Future<void> deleteConversation(String id) async {
     cancel(id);
+    _conversationContexts.remove(id);
     await db.transaction(() async {
       for (final message in await history(id)) {
         await db.remove('messages', text(message, 'id'));
@@ -92,6 +101,8 @@ class AgentService {
 
   List<Json> toolDefinitions({bool readOnly = false}) {
     const descriptions = {
+      'zju_get_current_page_context':
+          '获取用户当前界面的实时感知上下文（包括所在页面、辅助栏状态、当前查看课程/Tab、内容概述及建议调用的API）',
       'zju_get_courses': '查询学期内课程列表',
       'zju_get_assignments': '查询作业及截止时间',
       'zju_get_course_materials': '查询课程资料，返回 upload 文件 ID',
@@ -240,6 +251,13 @@ class AgentService {
       academicSemester(beijing(DateTime.now())),
     );
     switch (name) {
+      case 'zju_get_current_page_context':
+        final ctx =
+            (_currentConversationId != null
+                ? _conversationContexts[_currentConversationId]
+                : null) ??
+            getPageContext?.call();
+        return (ctx ?? PageContext.dashboard()).toJson();
       case 'zju_get_courses':
         return campus.courses(semesterId: semester);
       case 'zju_get_assignments':
@@ -299,8 +317,12 @@ class AgentService {
     String message, {
     String? conversationId,
     bool widget = false,
+    PageContext? pageContext,
   }) async* {
     final id = conversationId ?? const Uuid().v4();
+    if (pageContext != null) {
+      _conversationContexts[id] = pageContext;
+    }
     if (_active.containsKey(id)) {
       yield const AgentEvent('error', {'code': 'BUSY', 'message': '当前会话正在回答。'});
       return;
@@ -330,7 +352,7 @@ class AgentService {
             {'role': 'user', 'content': message},
           ]
         : await _wireHistory(id);
-    yield* _run(id, messages, widget: widget);
+    yield* _run(id, messages, widget: widget, pageContext: pageContext);
   }
 
   Future<List<Json>> _wireHistory(String id) async => (await history(id))
@@ -365,9 +387,15 @@ class AgentService {
     List<Json> messages, {
     bool widget = false,
     int round = 0,
+    PageContext? pageContext,
   }) async* {
     final token = CancelToken();
     _active[id] = token;
+    final activeContext =
+        pageContext ?? _conversationContexts[id] ?? getPageContext?.call();
+    if (activeContext != null) {
+      _conversationContexts[id] = activeContext;
+    }
     var stage = '读取模型配置';
     try {
       final settings = await db.get('settings', 'app') ?? {};
@@ -382,8 +410,10 @@ class AgentService {
       stage = '读取聊天提示词资产';
       final prompts = await loadPromptCatalog();
       stage = '组装聊天提示词';
+      final contextSection =
+          activeContext != null ? '\n\n${activeContext.toPrompt()}' : '';
       final system =
-          '${text(prompts, 'SYSTEM_PROMPT_TPL').replaceAll('__DATETIME__', beijing(DateTime.now()).toIso8601String()).replaceAll('__PERIOD__', academicSemester(beijing(DateTime.now())))}\n${text(prompts, 'GUIDE_RULES').replaceAll('__GUIDE_OUTLINE__', guide.outline)}\n称呼用户：${settings['nickname'] ?? ''}\n用户自述：${settings['personaPrompt'] ?? ''}${widget ? '\n${prompts['BRIEF_RULES']}' : ''}';
+          '${text(prompts, 'SYSTEM_PROMPT_TPL').replaceAll('__DATETIME__', beijing(DateTime.now()).toIso8601String()).replaceAll('__PERIOD__', academicSemester(beijing(DateTime.now())))}\n${text(prompts, 'GUIDE_RULES').replaceAll('__GUIDE_OUTLINE__', guide.outline)}\n称呼用户：${settings['nickname'] ?? ''}\n用户自述：${settings['personaPrompt'] ?? ''}$contextSection${widget ? '\n${prompts['BRIEF_RULES']}' : ''}';
       for (var r = round; r < 8; r++) {
         var content = '';
         final calls = <Json>[];
@@ -457,7 +487,7 @@ class AgentService {
             yield AgentEvent('done', {'conversationId': id, 'paused': true});
             return;
           }
-          final result = await _toolResult(call);
+          final result = await _toolResult(call, conversationId: id);
           final message = {
             'role': 'tool',
             'tool_call_id': call['id'],
@@ -486,8 +516,9 @@ class AgentService {
     }
   }
 
-  Future<Json> _toolResult(Json call) async {
+  Future<Json> _toolResult(Json call, {String? conversationId}) async {
     try {
+      _currentConversationId = conversationId;
       return {
         'ok': true,
         'data': await execute(text(call, 'name'), object(call['input'])),
@@ -502,6 +533,8 @@ class AgentService {
         'ok': false,
         'error': {'code': 'TOOL_FAILED', 'message': '工具执行失败。'},
       };
+    } finally {
+      _currentConversationId = null;
     }
   }
 
@@ -546,7 +579,7 @@ class AgentService {
                 'message': expired ? '确认已过期' : '用户拒绝',
               },
             }
-          : await _toolResult(call);
+          : await _toolResult(call, conversationId: id);
       await saveMessage(id, {
         'role': 'tool',
         'tool_call_id': call['id'],
@@ -566,6 +599,11 @@ class AgentService {
         'ok': result['ok'],
       });
     }
-    yield* _run(id, await _wireHistory(id), round: integer(pending!['round']));
+    yield* _run(
+      id,
+      await _wireHistory(id),
+      round: integer(pending!['round']),
+      pageContext: _conversationContexts[id],
+    );
   }
 }

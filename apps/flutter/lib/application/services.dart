@@ -5,6 +5,7 @@ import 'package:path_provider/path_provider.dart';
 import '../data/database.dart';
 import '../data/credentials.dart';
 import '../data/campus_session.dart';
+import '../domain/page_context.dart';
 import 'agent.dart';
 import 'campus.dart';
 import 'files.dart';
@@ -30,6 +31,18 @@ class AppServices {
   final BackupService backups;
   final AgentService agent;
   final Set<String> _initialRefreshes = <String>{};
+  PageContext? _currentPageContext;
+
+  /// 用户当前所在界面的实时感知上下文
+  PageContext? get currentPageContext => _currentPageContext;
+
+  /// Target tab for assignments page navigation (e.g. 'urgent', 'relaxed', 'submitted')
+  String targetAssignmentTab = 'all';
+
+  /// 更新用户当前界面的感知上下文
+  void updatePageContext(PageContext context) {
+    _currentPageContext = context;
+  }
 
   /// Claims the one automatic refresh allowed for a page in this app run.
   ///
@@ -63,20 +76,29 @@ class AppServices {
         });
       }
     }
-    return AppServices(
+    late final AppServices services;
+    final agent = AgentService(
+      campus,
+      files,
+      guide,
+      getPageContext: () => services.currentPageContext,
+    );
+    services = AppServices(
       db,
       secrets,
       campus,
       files,
       BackupService(db, files),
-      AgentService(campus, files, guide),
+      agent,
     );
+    return services;
   }
 
   Future<void> logout() async {
     agent.cancelAll();
     await campus.session.reset();
     _initialRefreshes.clear();
+    _currentPageContext = null;
     await secrets.delete('campus');
     await db.remove('cache');
     await db.remove('confirmations');

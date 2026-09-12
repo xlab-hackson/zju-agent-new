@@ -28,7 +28,7 @@ Windows 发布时需要携带整个 `build/windows/x64/runner/Release` 目录，
 - `archive` 3.6.1、`xml` 6.6.1 暂保留：Excel 4.0.6 对它们分别约束为 `^3.6.1` 和 `<7.0.0`。升级需另行迁移 Excel 库，不能通过 `dependency_overrides` 强行跨版本。
 - `material_color_utilities` 0.13.0 与 `test_api` 0.7.12 由当前 Flutter SDK 固定，随 SDK 更新处理。`flutter pub outdated` 仍显示这四项属于预期。
 
-依赖兼容测试在 `test/dependency_compatibility_test.dart`，覆盖 Markdown 表格及链接导航、保存取消与 Android content URI；原生安全存储和 SQLite 测试见 `integration_test/native_storage_test.dart`。2026-09-11 扫描时 `flutter test` 为 39 项全通过，`flutter analyze` 无 error 但有 18 条 info 级风格/弃用提示。
+依赖兼容测试在 `test/dependency_compatibility_test.dart`，覆盖 Markdown 表格及链接导航、保存取消与 Android content URI；原生安全存储和 SQLite 测试见 `integration_test/native_storage_test.dart`。截至 2026-09-12，`flutter test` 为 100 项全通过，`flutter analyze` 输出 `No issues found!`。
 
 ## 登录验证
 
@@ -51,7 +51,10 @@ flutter test integration_test/native_login_test.dart -d windows --dart-define=VE
 ## 当前实现边界
 
 - 课程表实际只有 1–13 节；目前横向自适应，但视觉网格纵向仍使用固定 52px 节次高度。代码中的额外晚间时间项属于待清理的遗留数据，不代表产品存在第 14、15 节。
+- 首页学业快览与课程总览辅助栏共用 `loadCourseOverview` 的教务网课程聚合结果；教务网考签、全历史课表和成绩库负责课程数、学分、教师、成绩和绩点，学在浙大只负责建课状态及资料/作业关联。
 - 每个数据页本次运行首次进入时强制绕过缓存请求；之后点击刷新或下拉刷新也强制请求。通知和校历同样接入一天缓存；通知页不使用下拉刷新，但保留强制刷新的页面按钮。数据页标题显示“数据更新于 N 分钟前”，下载页不参与这套缓存和更新时间提示。
+- 相同缓存 key 的并发请求由 `CampusService` 合并，成功写入缓存后通过 `cacheChanges` 广播给其他页面；页面收到事件后按依赖从缓存重组，不再次强制联网。组合页面的更新时间取实际依赖缓存中最早的成功时间。
+- `domain/page_context.dart` 统一记录当前页面、学期、辅助栏、课程详情和详情 Tab，并实时提供给 `AppServices`、聊天和 Agent 工具。
 - 退出登录当前会取消 Agent 请求，但还没有统一取消 `FileService` 的活动下载。
 - 工作台和课程资料弹层仍需修复错误态展示：部分路径直接展示 `snapshot.error`，课程资料请求出错时可能停留在 loading 状态。工作台、课表、设置和聊天窗也尚无完整的多宽度 widget overflow 自动回归。
 - Android 的校历公开地址是 `http://calendar.celechron.top`，已在网络安全配置中作为唯一远程明文例外，并有内置校历回退；Android release 尚未配置正式签名。
@@ -66,6 +69,8 @@ flutter test integration_test/native_login_test.dart -d windows --dart-define=VE
 4. 网络请求成功后写入带更新时间的缓存，默认有效期为一天；失败时可以回退到过期缓存，但必须标记 `stale` 并保留失败信息。
 5. 通知的素质拓展和教务网两个来源分别缓存、分别失败和回退，不能因为一个来源失败而丢失另一个来源的数据。
 6. 下载页只管理本地文件和下载状态，不参与网络数据缓存、首次进入刷新和“数据更新于 N 分钟前”提示。
+
+7. `CampusService` 对相同缓存 key 做请求去重，并通过 `cacheChanges` 广播成功写入；页面更新时间只依赖实际展示的数据，不得使用页面重组时间或无关历史缓存时间。
 
 不要在单个 widget 内重新实现缓存或用生命周期回调替代页面刷新闸门；修改刷新逻辑时应同时覆盖首次进入、重复进入、手动刷新、通知栏展开/收起和网络失败回退。
 

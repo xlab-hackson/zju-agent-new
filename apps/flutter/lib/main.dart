@@ -58,7 +58,11 @@ final appRouter = GoRouter(
     ])
       GoRoute(
         path: route,
-        builder: (context, state) => CampusShell(path: route),
+        builder: (context, state) => CampusShell(
+          key: state.pageKey,
+          path: route,
+          queryParameters: state.uri.queryParameters,
+        ),
       ),
     for (final alias in ['/dashboard', '/toolbox', '/chat'])
       GoRoute(path: alias, redirect: (context, state) => '/'),
@@ -90,8 +94,13 @@ const secondaryNavigation = [
 ];
 
 class CampusShell extends ConsumerWidget {
-  const CampusShell({super.key, required this.path});
+  const CampusShell({
+    super.key,
+    required this.path,
+    this.queryParameters = const {},
+  });
   final String path;
+  final Map<String, String> queryParameters;
 
   Widget icon(String name, {Color? color}) => SvgPicture.asset(
     'assets/icons/$name.svg',
@@ -115,7 +124,12 @@ class CampusShell extends ConsumerWidget {
         desktop = MediaQuery.sizeOf(context).width >= 1024;
     final feature = path != '/settings' && path != '/setup';
     final content = feature
-        ? FeaturePage(key: ValueKey(path), services: services, page: path)
+        ? FeaturePage(
+            key: ValueKey('$path?${queryParameters['tab'] ?? ''}'),
+            services: services,
+            page: path,
+            initialAssignmentTab: queryParameters['tab'],
+          )
         : SettingsPage(
             key: ValueKey(path),
             services: services,
