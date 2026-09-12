@@ -39,14 +39,40 @@ String confinedPath(String root, String relative) {
   return result;
 }
 
+/// 相对 [root] 的 [relative] 是否指向一个真实存在的文件。
+///
+/// 下载记录只存相对路径，换过下载根目录后旧记录会落到 false，下载页据此
+/// 显示「已被移除」。历史脏数据里的非法相对路径同样按 false 处理。
+Future<bool> localFileExists(String root, String relative) async {
+  if (relative.isEmpty) return false;
+  try {
+    return await File(confinedPath(root, relative)).exists();
+  } on AppError {
+    return false;
+  }
+}
+
 class FileService {
   FileService(this.campus, this.root);
   final CampusService campus;
-  final Directory root;
+
+  /// 下载根目录。可由设置页切换，因此不是 final。
+  Directory root;
   final _activeDownloadsByKey = <String, _ActiveDownload>{};
   final _activeDownloadsById = <String, _ActiveDownload>{};
   final _reservedPaths = <String>{};
   AgentDatabase get db => campus.db;
+
+  /// 切换下载根目录。
+  ///
+  /// 下载记录存的是相对旧根目录的路径，不会随目录一起搬家；切换后它们会
+  /// 因为文件不存在而在下载页显示为「已被移除」。这里只清掉同名占位缓存，
+  /// 让新目录重新计算可用文件名。
+  Future<void> moveRoot(Directory next) async {
+    await next.create(recursive: true);
+    root = next;
+    _reservedPaths.clear();
+  }
 
   Future<Json> download(Json input) {
     for (final key in ['fileId', 'fileName', 'courseId']) {

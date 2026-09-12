@@ -51,6 +51,8 @@ class _DownloadCardState extends State<DownloadCard> {
         text(r, 'fileId').isNotEmpty &&
         text(r, 'courseId').isNotEmpty;
     final completed = text(r, 'status') == 'completed';
+    // 记录还在，但文件已不在当前下载根目录下（例如中途换过下载目录）。
+    final missing = r['exists'] == false;
     final actions = Wrap(
       alignment: WrapAlignment.end,
       spacing: 4,
@@ -58,7 +60,7 @@ class _DownloadCardState extends State<DownloadCard> {
       children: [
         if (canPreview(kind))
           TextButton(
-            onPressed: busy || inProgress ? null : () => preview(),
+            onPressed: busy || inProgress || missing ? null : () => preview(),
             child: const Text('预览'),
           ),
         if (inProgress)
@@ -72,7 +74,7 @@ class _DownloadCardState extends State<DownloadCard> {
             child: Text(completed ? '重新下载' : '重试下载'),
           ),
         OutlinedButton(
-          onPressed: busy || inProgress ? null : () => run(openLocal),
+          onPressed: busy || inProgress || missing ? null : () => run(openLocal),
           child: const Text('打开'),
         ),
         if (!confirming)
@@ -129,6 +131,13 @@ class _DownloadCardState extends State<DownloadCard> {
                   '${formatBytes(integer(r['size']))} · ${formatDateTime(text(r, 'createdAt'))}',
                   style: const TextStyle(fontSize: 11, color: ink),
                 ),
+                if (missing) ...[
+                  const SizedBox(height: 5),
+                  const Text(
+                    '文件已被移除',
+                    style: TextStyle(fontSize: 11, color: seal),
+                  ),
+                ],
               ],
             ),
           );

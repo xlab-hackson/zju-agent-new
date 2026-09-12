@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../application/page_loaders/downloads_loader.dart';
 import '../../domain/models.dart';
@@ -66,6 +67,27 @@ class _DownloadsPageState extends CampusPageState<DownloadsPage> {
         (a, b) => (groupNames[a.key] ?? '').compareTo(groupNames[b.key] ?? ''),
       );
     return [
+      Paper(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            const Icon(Icons.folder_outlined, size: 18, color: ink),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                '保存位置：${text(d, 'downloadDir')}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 12, color: ink),
+              ),
+            ),
+            TextButton(
+              onPressed: () => context.go('/settings'),
+              child: const Text('更改'),
+            ),
+          ],
+        ),
+      ),
       if (files.isEmpty)
         Paper(
           child: PageEmpty(
