@@ -41,6 +41,9 @@ data/
 *.sqlite
 *.sqlite-journal
 downloads/
+# Download UI components are source code, not downloaded runtime files.
+!/apps/flutter/lib/ui/downloads/
+!/apps/flutter/lib/ui/downloads/*.dart
 
 # TypeScript
 *.tsbuildinfo

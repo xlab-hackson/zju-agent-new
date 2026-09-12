@@ -45,6 +45,9 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   void initState() {
     super.initState();
+    widget.services.updatePageContext(
+      widget.setup ? PageContext.setup() : PageContext.settings(),
+    );
     load();
   }
 

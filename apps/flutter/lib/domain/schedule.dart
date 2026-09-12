@@ -39,10 +39,20 @@ String academicSemester(DateTime wall) {
 }
 
 String? semesterToId(String name) {
-  final m = RegExp(r'^(\d{4}-\d{4})(春夏|秋冬|春|夏|秋|冬|短)$').firstMatch(name);
-  return m == null
-      ? null
-      : '${m[1]}-${['春', '夏', '春夏'].contains(m[2]) ? 2 : 1}';
+  final trimmed = name.trim();
+  if (RegExp(r'^\d{4}-\d{4}-[12]$').hasMatch(trimmed)) {
+    return trimmed;
+  }
+  final m = RegExp(r'(\d{4}-\d{4})').firstMatch(trimmed);
+  if (m == null) return null;
+  final year = m.group(1)!;
+  if (trimmed.contains('春') || trimmed.contains('夏') || trimmed.endsWith('-2')) {
+    return '$year-2';
+  }
+  if (trimmed.contains('秋') || trimmed.contains('冬') || trimmed.contains('短') || trimmed.endsWith('-1')) {
+    return '$year-1';
+  }
+  return null;
 }
 
 Json dateInfo(DateTime wall, Json config) {

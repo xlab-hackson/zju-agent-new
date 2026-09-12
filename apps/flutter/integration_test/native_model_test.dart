@@ -42,8 +42,9 @@ void main() {
           );
           fail('Configured model did not complete: ${event.data['code']}');
         }
-        if (event.type == 'text' && text(event.data, 'delta').isNotEmpty)
+        if (event.type == 'text' && text(event.data, 'delta').isNotEmpty) {
           hasText = true;
+        }
         if (event.type == 'done') done = event.data['paused'] == false;
       }
       expect(hasText, isTrue);

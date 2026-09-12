@@ -489,7 +489,11 @@ class _ChatPaneState extends State<ChatPane> {
     input.clear();
     setState(() => messages.add({'role': 'user', 'content': message}));
     await consume(
-      widget.services.agent.chat(message, conversationId: conversationId),
+      widget.services.agent.chat(
+        message,
+        conversationId: conversationId,
+        pageContext: widget.services.currentPageContext,
+      ),
     );
   }
 

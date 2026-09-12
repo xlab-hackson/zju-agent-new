@@ -170,8 +170,8 @@ void main() {
     },
   );
   test('tool schemas enforce required fields and batch bounds', () {
-    expect(agent.toolDefinitions().length, 14);
-    expect(agent.toolDefinitions(readOnly: true).length, 12);
+    expect(agent.toolDefinitions().length, 15);
+    expect(agent.toolDefinitions(readOnly: true).length, 13);
     expect(
       () => agent.validate('zju_download_course_material', {'fileId': '1'}),
       throwsA(isA<AppError>()),
