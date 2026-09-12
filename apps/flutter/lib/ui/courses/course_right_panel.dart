@@ -17,6 +17,7 @@ class CourseRightPanel extends StatelessWidget {
     required this.onSelect,
     this.onRefresh,
     this.refreshing = false,
+    this.onCollapse,
   });
   final Json data;
   final String selected;
@@ -24,6 +25,9 @@ class CourseRightPanel extends StatelessWidget {
   final ValueChanged<Json> onSelect;
   final VoidCallback? onRefresh;
   final bool refreshing;
+
+  /// 收起整个辅助栏。只在宽屏辅助栏里提供；窄屏是底部弹层，关闭即可。
+  final VoidCallback? onCollapse;
 
   @override
   Widget build(BuildContext context) {
@@ -63,24 +67,44 @@ class CourseRightPanel extends StatelessWidget {
     return SideSection(
       title: '学期总览',
       icon: 'scroll',
-      trailing: onRefresh != null
-          ? IconButton(
-              onPressed: refreshing ? null : onRefresh,
-              tooltip: '刷新课程',
-              icon: refreshing
-                  ? const SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: blue,
-                      ),
-                    )
-                  : const Icon(Icons.refresh, size: 16, color: ink),
-              constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-              padding: EdgeInsets.zero,
-            )
-          : null,
+      trailing: (onRefresh == null && onCollapse == null)
+          ? null
+          : Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (onRefresh != null)
+                  IconButton(
+                    onPressed: refreshing ? null : onRefresh,
+                    tooltip: '刷新课程',
+                    icon: refreshing
+                        ? const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: blue,
+                            ),
+                          )
+                        : const Icon(Icons.refresh, size: 16, color: ink),
+                    constraints: const BoxConstraints(
+                      minWidth: 28,
+                      minHeight: 28,
+                    ),
+                    padding: EdgeInsets.zero,
+                  ),
+                if (onCollapse != null)
+                  IconButton(
+                    onPressed: onCollapse,
+                    tooltip: '收起学期总览',
+                    icon: const Icon(Icons.chevron_right, size: 18, color: ink),
+                    constraints: const BoxConstraints(
+                      minWidth: 28,
+                      minHeight: 28,
+                    ),
+                    padding: EdgeInsets.zero,
+                  ),
+              ],
+            ),
       children: [
         Row(
           children: [

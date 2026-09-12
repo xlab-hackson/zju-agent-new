@@ -125,7 +125,7 @@ mixin CourseOverviewState<T extends CampusDataPage> on CampusPageState<T> {
 
   Future<Json> loadOverview({bool refresh = false}) =>
       _loadOverviewData(refresh: refresh);
-  Widget overviewPanelContent() =>
+  Widget overviewPanelContent({VoidCallback? onCollapse}) =>
       FutureBuilder<Json>(
         future: overviewData ??= loadOverview(
           refresh: s.claimInitialRefresh('/courses:panel'),
@@ -178,6 +178,7 @@ mixin CourseOverviewState<T extends CampusDataPage> on CampusPageState<T> {
             },
             onRefresh: refreshOverview,
             onSelect: courseDetail,
+            onCollapse: onCollapse,
           );
         },
       );
@@ -202,7 +203,9 @@ mixin CourseOverviewState<T extends CampusDataPage> on CampusPageState<T> {
             onRefresh: refreshOverview,
             child: SingleChildScrollView(
               physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
+              // 右侧多留出滚动条宽度：桌面端 Scrollbar 画在滚动视图右缘，
+              // 内容不内缩就会被压住。
+              padding: const EdgeInsets.fromLTRB(20, 18, 34, 28),
               child: FutureBuilder<Json>(
                 future: overviewData ??= loadOverview(
                   refresh: s.claimInitialRefresh('/courses:panel'),
