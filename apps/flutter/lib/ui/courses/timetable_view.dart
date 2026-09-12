@@ -310,14 +310,7 @@ class _TimetableViewState extends State<TimetableView> {
           }
         },
         child: ScrollConfiguration(
-          behavior: ScrollConfiguration.of(context).copyWith(
-            scrollbars: false,
-            dragDevices: {
-              PointerDeviceKind.touch,
-              PointerDeviceKind.mouse,
-              PointerDeviceKind.trackpad,
-            },
-          ),
+          behavior: const NoScrollbarScrollBehavior(),
           child: SingleChildScrollView(
             controller: _tabsScrollController,
             scrollDirection: Axis.horizontal,

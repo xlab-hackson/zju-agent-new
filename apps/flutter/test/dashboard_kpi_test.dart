@@ -483,6 +483,13 @@ void main() {
 
         // Verify no DropdownButtonFormField is rendered
         expect(find.byType(DropdownButtonFormField<String>), findsNothing);
+        expect(
+          find.descendant(
+            of: find.byType(SingleChildScrollView),
+            matching: find.text('全部学期'),
+          ),
+          findsOneWidget,
+        );
 
         // Verify semester tabs are rendered as pill buttons
         expect(find.text('全部学期'), findsOneWidget);

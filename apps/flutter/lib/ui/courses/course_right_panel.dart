@@ -532,14 +532,7 @@ class _HorizontalSemesterTabsState extends State<_HorizontalSemesterTabs> {
         }
       },
       child: ScrollConfiguration(
-        behavior: ScrollConfiguration.of(context).copyWith(
-          scrollbars: false,
-          dragDevices: {
-            PointerDeviceKind.touch,
-            PointerDeviceKind.mouse,
-            PointerDeviceKind.trackpad,
-          },
-        ),
+        behavior: const NoScrollbarScrollBehavior(),
         child: SingleChildScrollView(
           controller: _scrollController,
           scrollDirection: Axis.horizontal,

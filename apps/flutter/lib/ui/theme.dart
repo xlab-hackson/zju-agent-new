@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 const paper = Color(0xfff3ecdc),
@@ -94,4 +95,22 @@ class PaperLines extends CustomPainter {
 
   @override
   bool shouldRepaint(PaperLines oldDelegate) => false;
+}
+
+class NoScrollbarScrollBehavior extends MaterialScrollBehavior {
+  const NoScrollbarScrollBehavior();
+
+  @override
+  Widget buildScrollbar(
+    BuildContext context,
+    Widget child,
+    ScrollableDetails details,
+  ) => child;
+
+  @override
+  Set<PointerDeviceKind> get dragDevices => {
+    PointerDeviceKind.touch,
+    PointerDeviceKind.mouse,
+    PointerDeviceKind.trackpad,
+  };
 }
