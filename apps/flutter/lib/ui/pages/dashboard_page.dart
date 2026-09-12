@@ -84,6 +84,8 @@ class _DashboardPageState extends CampusPageState<DashboardPage>
     if (snapshot.hasError) return [Paper(child: Text('${snapshot.error}'))];
     final d = snapshot.data ?? {};
     final settings = object(d['settings'] ?? {});
+    // 隐藏绩点只作用于本卡的绩点与均分；辅助栏、课程表与课程列表仍正常显示。
+    final hideGpa = settings['hideGpa'] == true;
     final schedule = object(d['schedule'] ?? {});
     final events = rows(schedule['events'] ?? []);
     final rawAssignments = rows(d['assignments'] ?? []);
@@ -199,6 +201,7 @@ class _DashboardPageState extends CampusPageState<DashboardPage>
         relaxedCount: relaxedAssignments.length,
         submittedCount: submittedAssignments.length,
         gradeStats: gradeStats,
+        hideGpa: hideGpa,
       ),
       ChapterHead(juan: '卷三', title: '校园百宝箱', icon: 'scroll'),
       _toolGrid(),
@@ -242,6 +245,7 @@ class _DashboardPageState extends CampusPageState<DashboardPage>
     required int relaxedCount,
     required int submittedCount,
     required GradeStats gradeStats,
+    required bool hideGpa,
   }) => LayoutBuilder(
     builder: (context, constraints) {
       final columns = constraints.maxWidth >= 900
@@ -341,7 +345,9 @@ class _DashboardPageState extends CampusPageState<DashboardPage>
               icon: 'area-chart',
               items: [
                 MultiMetricItem(
-                  value: gradeStats.hasData && gradeStats.gpa > 0
+                  value: hideGpa
+                      ? '*'
+                      : gradeStats.hasData && gradeStats.gpa > 0
                       ? gradeStats.gpa.toStringAsFixed(2)
                       : '--',
                   label: '目前总绩点',
@@ -366,7 +372,9 @@ class _DashboardPageState extends CampusPageState<DashboardPage>
                   },
                 ),
                 MultiMetricItem(
-                  value: gradeStats.hasData && gradeStats.averageScore > 0
+                  value: hideGpa
+                      ? '*'
+                      : gradeStats.hasData && gradeStats.averageScore > 0
                       ? gradeStats.averageScore.toStringAsFixed(1)
                       : '--',
                   label: '百分制均分',

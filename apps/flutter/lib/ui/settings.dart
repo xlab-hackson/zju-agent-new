@@ -731,6 +731,36 @@ class _SettingsPageState extends State<SettingsPage> {
                     ),
                   ],
                 ),
+                const SizedBox(height: 20),
+                const Divider(height: 1),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text('隐藏绩点', style: TextStyle(fontSize: 14)),
+                    ),
+                    Switch(
+                      value: app['hideGpa'] == true,
+                      onChanged: busy
+                          ? null
+                          : (value) => perform(() async {
+                              app = {...app, 'hideGpa': value};
+                              await widget.services.db.put(
+                                'settings',
+                                'app',
+                                app,
+                              );
+                            }),
+                    ),
+                  ],
+                ),
+                Text(
+                  '开启后工作台「学业成绩」卡的绩点与均分显示为 *，辅助栏与课程表内仍正常显示。',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: ink.withValues(alpha: .6),
+                  ),
+                ),
               ],
             ],
           ),
