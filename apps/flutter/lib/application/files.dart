@@ -53,25 +53,44 @@ Future<bool> localFileExists(String root, String relative) async {
 }
 
 class FileService {
-  FileService(this.campus, this.root);
-  final CampusService campus;
+  FileService(this.campus, Directory initialRoot, {Directory? defaultRoot})
+      : _root = initialRoot,
+        _defaultRoot = defaultRoot ?? initialRoot;
 
-  /// 下载根目录。可由设置页切换，因此不是 final。
-  Directory root;
+  final CampusService campus;
+  Directory _root;
+  final Directory _defaultRoot;
   final _activeDownloadsByKey = <String, _ActiveDownload>{};
   final _activeDownloadsById = <String, _ActiveDownload>{};
   final _reservedPaths = <String>{};
   AgentDatabase get db => campus.db;
 
-  /// 切换下载根目录。
-  ///
-  /// 下载记录存的是相对旧根目录的路径，不会随目录一起搬家；切换后它们会
-  /// 因为文件不存在而在下载页显示为「已被移除」。这里只清掉同名占位缓存，
-  /// 让新目录重新计算可用文件名。
-  Future<void> moveRoot(Directory next) async {
-    await next.create(recursive: true);
-    root = next;
-    _reservedPaths.clear();
+  Directory get root => _root;
+  Directory get defaultRoot => _defaultRoot;
+  bool get isCustomDirectory =>
+      p.normalize(_root.path) != p.normalize(_defaultRoot.path);
+
+  Future<void> setDownloadDirectory(String? newPath) async {
+    final trimmed = newPath?.trim() ?? '';
+    final defaultNormalized = p.normalize(_defaultRoot.path);
+    if (trimmed.isEmpty || p.normalize(trimmed) == defaultNormalized) {
+      _root = _defaultRoot;
+      final current = await db.get('settings', 'app') ?? {};
+      final updated = Map<String, dynamic>.from(current)
+        ..remove('downloadDirectory');
+      await db.put('settings', 'app', updated);
+      return;
+    }
+
+    final targetDir = Directory(p.normalize(trimmed));
+    if (!targetDir.existsSync()) {
+      targetDir.createSync(recursive: true);
+    }
+    _root = targetDir;
+    final current = await db.get('settings', 'app') ?? {};
+    final updated = Map<String, dynamic>.from(current)
+      ..['downloadDirectory'] = targetDir.path;
+    await db.put('settings', 'app', updated);
   }
 
   Future<Json> download(Json input) {
@@ -121,6 +140,7 @@ class FileService {
       'id': id,
       'fileName': name,
       'relativePath': relative,
+      'downloadDir': root.path,
       'status': 'downloading',
       'courseId': courseId,
       'courseName': courseName,
@@ -204,17 +224,50 @@ class FileService {
   }
 
   Future<File> file(Json record) async {
-    final candidate = File(
-      confinedPath(root.path, text(record, 'relativePath')),
-    );
-    if (!await candidate.exists()) {
-      throw const AppError('FILE_NOT_FOUND', '文件已被移除。');
+    final relative = text(record, 'relativePath');
+    final recordedDir = text(record, 'downloadDir').trim();
+
+    // 1. Try recorded directory if available
+    if (recordedDir.isNotEmpty) {
+      try {
+        final candidate = File(confinedPath(recordedDir, relative));
+        if (await candidate.exists()) {
+          final real = await candidate.resolveSymbolicLinks();
+          if (p.isWithin(
+            await Directory(recordedDir).resolveSymbolicLinks(),
+            real,
+          )) {
+            return candidate;
+          }
+        }
+      } catch (_) {}
     }
-    final real = await candidate.resolveSymbolicLinks();
-    if (!p.isWithin(await root.resolveSymbolicLinks(), real)) {
-      throw const AppError('FILE_NOT_FOUND', '文件路径非法。');
+
+    // 2. Try current root
+    try {
+      final candidate = File(confinedPath(root.path, relative));
+      if (await candidate.exists()) {
+        final real = await candidate.resolveSymbolicLinks();
+        if (p.isWithin(await root.resolveSymbolicLinks(), real)) {
+          return candidate;
+        }
+      }
+    } catch (_) {}
+
+    // 3. Try default root if different from root
+    if (p.normalize(defaultRoot.path) != p.normalize(root.path)) {
+      try {
+        final fallback = File(confinedPath(defaultRoot.path, relative));
+        if (await fallback.exists()) {
+          final real = await fallback.resolveSymbolicLinks();
+          if (p.isWithin(await defaultRoot.resolveSymbolicLinks(), real)) {
+            return fallback;
+          }
+        }
+      } catch (_) {}
     }
-    return candidate;
+
+    throw const AppError('FILE_NOT_FOUND', '文件已被移除。');
   }
 
   Future<void> delete(Json record, {bool purge = false}) async {

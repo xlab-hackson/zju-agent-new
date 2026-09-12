@@ -48,11 +48,13 @@ class TimetableEntry {
     this.subSemester = '',
     this.weeks = const [],
     this.credit = 0.0,
+    this.selected = true,
   });
   final String id, courseName, teacher, location, semester, subSemester;
   final int weekday, startSection, endSection;
   final List<int> weeks;
   final double credit;
+  final bool selected;
   factory TimetableEntry.fromJson(Json j) => TimetableEntry(
     id: text(j, 'id'),
     courseName: text(j, 'courseName'),
@@ -67,6 +69,7 @@ class TimetableEntry {
     credit: (j['credit'] is num
         ? (j['credit'] as num).toDouble()
         : double.tryParse('${j['credit'] ?? j['xf'] ?? 0}') ?? 0.0),
+    selected: j['selected'] != false && j['enrolled'] != false,
   );
   Json toJson() => {
     'id': id,
@@ -80,10 +83,12 @@ class TimetableEntry {
     'subSemester': subSemester,
     'weeks': weeks,
     'credit': credit,
+    'selected': selected,
   };
 }
 
 int timetableCourseCount(Iterable<TimetableEntry> entries) => entries
+    .where((entry) => entry.selected)
     .map((entry) => entry.courseName.trim())
     .where((name) => name.isNotEmpty)
     .toSet()
@@ -113,6 +118,7 @@ List<TimetableEntry> mergeTimetable(List<TimetableEntry> entries) {
       result[i] = TimetableEntry.fromJson({
         ...p.toJson(),
         'credit': maxCredit,
+        'selected': p.selected && e.selected,
         'endSection': e.endSection > p.endSection ? e.endSection : p.endSection,
       });
     }

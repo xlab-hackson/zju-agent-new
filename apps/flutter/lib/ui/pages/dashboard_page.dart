@@ -132,7 +132,9 @@ class _DashboardPageState extends CampusPageState<DashboardPage>
         .toList();
     final submittedAssignments = activeAssignments.where(isSubmitted).toList();
 
-    final currentSemesterCredits = courseCredits(currentCourses);
+    final selectedCurrentCourses =
+        currentCourses.where(isCourseSelected).toList();
+    final currentSemesterCredits = courseCredits(selectedCurrentCourses);
     final gradeStats = GradeStats.compute(
       grades: allGrades,
       currentSemester: '',
@@ -194,7 +196,7 @@ class _DashboardPageState extends CampusPageState<DashboardPage>
         _dashboardAssignments(assignments48h),
       ChapterHead(juan: '卷二', title: '学业快览', icon: 'area-chart'),
       _kpiRow(
-        courses: currentCourses.length,
+        courses: selectedCurrentCourses.length,
         semesterCredits: gradeStats.semesterCredits,
         exams: exams.length,
         urgentCount: urgentAssignments.length,

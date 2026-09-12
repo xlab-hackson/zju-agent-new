@@ -127,6 +127,7 @@ List<Json> dailyEvents(
   if (info['effectiveWeekday'] != 0 &&
       projection['periodType'] == 'instruction') {
     for (final e in timetable) {
+      if (!e.selected) continue;
       final w = integer(projection['week']);
       if (e.weekday != info['effectiveWeekday'] ||
           (e.weeks.isNotEmpty && !e.weeks.contains(w))) {

@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:zju_campus_agent/application/agent.dart';
 import 'package:zju_campus_agent/application/campus.dart';
 import 'package:zju_campus_agent/application/course_overview.dart';
+import 'package:zju_campus_agent/application/page_loaders/courses_loader.dart';
 import 'package:zju_campus_agent/application/files.dart';
 import 'package:zju_campus_agent/application/knowledge.dart';
 import 'package:zju_campus_agent/application/services.dart';
@@ -319,7 +320,7 @@ void main() {
   });
 
   testWidgets(
-    'Timetable and right panel semesters are decoupled in FeaturePage',
+    'Timetable and right panel semester tabs are synchronized in CoursesPage',
     (tester) async {
       tester.view.physicalSize = const Size(1200, 900);
       tester.view.devicePixelRatio = 1.0;
@@ -330,7 +331,7 @@ void main() {
       final secrets = _FakeSecrets();
       final campus = CampusService(CampusSession(secrets), db);
       final tempDir = Directory.systemTemp.createTempSync(
-        'course_decouple_test_',
+        'course_sync_test_',
       );
       addTearDown(() => tempDir.deleteSync(recursive: true));
       final files = FileService(campus, tempDir);
@@ -375,6 +376,20 @@ void main() {
         ],
         'updatedAt': DateTime.now().toUtc().toIso8601String(),
       });
+      await db.put('cache', 'timetable:2023-2024-1', {
+        'items': [
+          {
+            'courseName': '线性代数',
+            'dayOfWeek': 2,
+            'startPeriod': 3,
+            'endPeriod': 4,
+            'location': '教7-401',
+            'teacherName': '李老师',
+            'weeks': [1, 2, 3],
+          },
+        ],
+        'updatedAt': DateTime.now().toUtc().toIso8601String(),
+      });
 
       await tester.pumpWidget(
         MaterialApp(
@@ -390,9 +405,46 @@ void main() {
       expect(find.text('导出 Excel'), findsOneWidget);
       expect(find.text('高等数学'), findsWidgets);
 
-      // Right panel shows '全部课程 2 门' because overviewSemester is 'all'
+      // Initial: Right panel is synchronized to current semester, showing only currentSem courses
+      expect(find.text('2023-2024秋冬'), findsWidgets);
+      expect(find.text('线性代数'), findsNothing);
+
+      // 1. Switch timetable tab to 2023-2024秋冬 via timetable header
+      await tester.tap(find.text('2023-2024秋冬').first);
+      await tester.pumpAndSettle();
+
+      // Both Timetable and Right panel are synchronized to 2023-2024-1
+      expect(find.text('线性代数'), findsWidgets);
+
+      // 2. Tap '全部学期' in right panel
+      await tester.ensureVisible(find.text('全部学期'));
+      await tester.tap(find.text('全部学期'));
+      await tester.pumpAndSettle();
+
+      // Right panel shows '全部课程 2 门' (both courses visible)
       expect(find.text('全部课程 2 门'), findsOneWidget);
-      expect(find.text('线性代数'), findsOneWidget);
+      expect(find.text('高等数学'), findsWidgets);
+      expect(find.text('线性代数'), findsWidgets);
+
+      // 3. Switch timetable tab back to currentSem: right panel synchronizes back
+      final currentChoices = semesterChoices([
+        {'id': currentSem, 'name': '$currentSem学期'},
+      ], includeAll: false);
+      final currentSemTabName = currentChoices.first.name;
+      await tester.tap(find.text(currentSemTabName).first);
+      await tester.pumpAndSettle();
+
+      // Right panel switches back to currentSem (shows only 高等数学)
+      expect(find.text('线性代数'), findsNothing);
+      expect(find.text('高等数学'), findsWidgets);
+
+      // 4. Switch semester from Right Panel tab: tap 2023-2024秋冬 in right panel
+      await tester.ensureVisible(find.text('2023-2024秋冬').last);
+      await tester.tap(find.text('2023-2024秋冬').last);
+      await tester.pumpAndSettle();
+
+      // Both right panel and timetable switch to 2023-2024-1
+      expect(find.text('线性代数'), findsWidgets);
     },
   );
 
@@ -707,7 +759,7 @@ void main() {
   );
 
   testWidgets(
-    'TimetableView header restricts semester tabs to roughly one half of header width on desktop and adapts tab sizes',
+    'TimetableView header renders horizontal scrollable semester tabs with Expanded and action buttons',
     (tester) async {
       const totalWidth = 900.0;
       tester.view.physicalSize = const Size(totalWidth, 600);
@@ -734,18 +786,78 @@ void main() {
         ),
       );
 
-      // Container padding is 14 on each side, so width is 900 - 28 = 872
-      // Half width is 872 / 2 = 436.0
-      final sizedBoxFinder = find.byWidgetPredicate(
-        (w) =>
-            w is SizedBox && w.width != null && (w.width! - 436.0).abs() < 1.0,
-      );
-      expect(sizedBoxFinder, findsOneWidget);
+      // Verify horizontal scroll view is rendered
+      expect(find.byType(SingleChildScrollView), findsWidgets);
 
-      // Verify all 5 choices are rendered and visible without scrolling on desktop
+      // Action buttons are rendered on the right
+      expect(find.text('导出图片'), findsOneWidget);
+      expect(find.text('导出 Excel'), findsOneWidget);
+      expect(find.byTooltip('刷新课表'), findsOneWidget);
+
+      // Verify choices are rendered
       for (final choice in choices) {
         expect(find.text(choice.name), findsOneWidget);
       }
+    },
+  );
+
+  testWidgets(
+    'TimetableView header does not overflow across narrow and wide screen widths',
+    (tester) async {
+      final testChoices = [
+        const SemesterChoice('sem1', '2025-2026秋冬'),
+        const SemesterChoice('sem2', '2024-2025春夏'),
+        const SemesterChoice('sem3', '2024-2025秋冬'),
+        const SemesterChoice('sem4', '2023-2024春夏'),
+        const SemesterChoice('sem5', '2023-2024秋冬'),
+        const SemesterChoice('sem6', '2022-2023春夏'),
+        const SemesterChoice('sem7', '2022-2023秋冬'),
+        const SemesterChoice('sem8', '2021-2022春夏'),
+        const SemesterChoice('sem9', '2021-2022秋冬'),
+        const SemesterChoice('sem10', '2020-2021春夏'),
+      ];
+
+      FlutterErrorDetails? lastError;
+      final origOnError = FlutterError.onError;
+      FlutterError.onError = (details) {
+        lastError = details;
+        origOnError?.call(details);
+      };
+      addTearDown(() => FlutterError.onError = origOnError);
+
+      for (final width in [360.0, 480.0, 580.0, 619.0, 620.0, 680.0, 744.0, 772.0, 800.0, 1024.0]) {
+        tester.view.physicalSize = Size(width, 600);
+        tester.view.devicePixelRatio = 1.0;
+
+        for (final count in [2, 3, 4, 10]) {
+          final choices = testChoices.sublist(0, count);
+          lastError = null;
+          await tester.pumpWidget(
+            MaterialApp(
+              home: Scaffold(
+                body: TimetableView(
+                  entries: const [],
+                  semester: 'sem1',
+                  choices: choices,
+                ),
+              ),
+            ),
+          );
+          final ex = tester.takeException();
+          if (ex != null) {
+            // ignore: avoid_print
+            print('EXCEPTION at width $width with count $count:');
+            // ignore: avoid_print
+            print(lastError);
+          }
+          expect(
+            ex,
+            isNull,
+            reason: 'Failed at width $width with $count choices',
+          );
+        }
+      }
+      addTearDown(() => tester.view.resetPhysicalSize());
     },
   );
 
@@ -972,7 +1084,7 @@ void main() {
   );
 
   testWidgets(
-    'CourseRightPanel renders tabs and stays within 2 rows when multiple semesters exist',
+    'CourseRightPanel renders horizontal scrollable semester tabs and switches correctly',
     (tester) async {
       final semesters = [
         {'id': '2024-2025-1', 'name': '2024-2025学年秋冬学期'},
@@ -1011,7 +1123,7 @@ void main() {
         ),
       );
 
-      // With 4 semesters + 'all', total 5 choices: splits into 2 rows (row1: 3, row2: 2)
+      // With 4 semesters + 'all', total 5 choices rendered in horizontal scroll bar
       expect(find.text('全部学期'), findsOneWidget);
       expect(find.text('2024-2025秋冬'), findsOneWidget);
       expect(find.text('2024-2025春夏'), findsOneWidget);
@@ -1019,6 +1131,7 @@ void main() {
       expect(find.text('2025-2026春夏'), findsOneWidget);
 
       // Tap '2024-2025秋冬' tab
+      await tester.ensureVisible(find.text('2024-2025秋冬'));
       await tester.tap(find.text('2024-2025秋冬'));
       await tester.pumpAndSettle();
 
@@ -1026,6 +1139,7 @@ void main() {
       expect(find.text('数据库系统'), findsNothing);
 
       // Tap '全部学期'
+      await tester.ensureVisible(find.text('全部学期'));
       await tester.tap(find.text('全部学期'));
       await tester.pumpAndSettle();
 
@@ -1457,6 +1571,8 @@ void main() {
         ),
       );
 
+      await tester.pumpAndSettle();
+
       // In 'all' mode:
       expect(find.text('目前总绩点'), findsOneWidget);
       expect(find.text('获得总学分'), findsOneWidget);
@@ -1466,6 +1582,7 @@ void main() {
       expect(find.textContaining('全历程共 2 门课程 · 已出分 1 门'), findsOneWidget);
 
       // Switch to 2024-2025秋冬 (ongoing semester, c2 has 4 credits but not graded yet)
+      await tester.ensureVisible(find.text('2024-2025秋冬'));
       await tester.tap(find.text('2024-2025秋冬'));
       await tester.pumpAndSettle();
 
@@ -1476,6 +1593,7 @@ void main() {
       expect(find.textContaining('本学期共 1 门课程 · 暂未出分'), findsOneWidget);
 
       // Switch to 2023-2024秋冬 (graded semester)
+      await tester.ensureVisible(find.text('2023-2024秋冬'));
       await tester.tap(find.text('2023-2024秋冬'));
       await tester.pumpAndSettle();
 
@@ -1560,25 +1678,25 @@ void main() {
   );
 
   testWidgets(
-    'CourseRightPanel shows 未建课 tag and allows opening course detail when course not created on 学在浙大',
+    'CourseRightPanel distinguishes created vs uncreated courses by border and allows opening course detail when course not created on 学在浙大',
     (tester) async {
       final semesters = [
-        {'id': '2024-2025-1', 'name': '2024-2025学年秋冬学期'},
+        {'id': '2024-2025-1', 'name': '2024-2025学年秋冬学期', 'isActive': true},
       ];
       final courses = [
-        {
-          'id': 'cs101',
-          'name': '微积分（1）',
-          'semesterId': '2024-2025-1',
-          'credit': 5.0,
-          'learningZjuCreated': true,
-        },
         {
           'id': '',
           'name': '大学体育（1）',
           'semesterId': '2024-2025-1',
           'credit': 1.0,
           'learningZjuCreated': false,
+        },
+        {
+          'id': 'cs101',
+          'name': '微积分（1）',
+          'semesterId': '2024-2025-1',
+          'credit': 5.0,
+          'learningZjuCreated': true,
         },
       ];
 
@@ -1601,7 +1719,14 @@ void main() {
       expect(find.text('微积分（1）'), findsOneWidget);
       expect(find.text('大学体育（1）'), findsOneWidget);
 
-      // 大学体育（1） should display 未建课 tag
+      // Created course appears before uncreated course
+      expect(
+        tester.getTopLeft(find.text('微积分（1）')).dy <
+            tester.getTopLeft(find.text('大学体育（1）')).dy,
+        isTrue,
+      );
+
+      // Selected but uncreated course has 未建课 badge
       expect(find.text('未建课'), findsOneWidget);
 
       // Clicking 大学体育（1） SHOULD trigger onSelect and open course detail
@@ -1777,6 +1902,544 @@ void main() {
       expect(policy['teacher'], '王老师');
     },
   );
+
+  testWidgets(
+    'CourseRightPanel renders rectangular cards with teacher, time and distinct borders for created vs uncreated courses',
+    (tester) async {
+      Json? selectedCourse;
+      final testData = {
+        'semesters': [
+          {'id': '2024-2025-1', 'name': '2024-2025学年秋冬学期', 'isActive': true},
+        ],
+        'courses': [
+          {
+            'id': '',
+            'name': 'A 轮滑（初级）',
+            'semesterId': '2024-2025-1',
+            'semester': '2024-2025-1',
+            'credit': 1.0,
+            'teacher': '杨雨桐',
+            'scheduleTime': '周三 6-8节',
+            'learningZjuCreated': false,
+          },
+          {
+            'id': 'l_zju_101',
+            'name': '中国近现代史纲要',
+            'semesterId': '2024-2025-1',
+            'semester': '2024-2025-1',
+            'credit': 3.0,
+            'teacher': '杨雨桐',
+            'scheduleTime': '周三 6-8节 (秋 1-8周)',
+            'score': '89',
+            'gpa': '4.5',
+            'learningZjuCreated': true,
+          },
+        ],
+        'grades': <Json>[],
+      };
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: paperTheme(),
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: CourseRightPanel(
+                data: testData,
+                selected: '2024-2025-1',
+                onChanged: (_) {},
+                onSelect: (c) => selectedCourse = c,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Verify course titles
+      expect(find.text('中国近现代史纲要'), findsOneWidget);
+      expect(find.text('A 轮滑（初级）'), findsOneWidget);
+
+      // Verify created course appears before uncreated course regardless of alphabet
+      expect(
+        tester.getTopLeft(find.text('中国近现代史纲要')).dy <
+            tester.getTopLeft(find.text('A 轮滑（初级）')).dy,
+        isTrue,
+      );
+
+      // Verify teachers
+      expect(find.text('杨雨桐'), findsNWidgets(2));
+
+      // Verify times: both created and uncreated courses have schedule times
+      expect(find.text('周三 6-8节 (秋 1-8周)'), findsOneWidget);
+      expect(find.text('周三 6-8节'), findsOneWidget);
+
+      // Verify badges: grade badge, credits, and 未建课 badge
+      expect(find.text('89分 / 4.5'), findsOneWidget);
+      expect(find.text('未建课'), findsOneWidget);
+      expect(find.text('3 学分'), findsOneWidget);
+      expect(find.text('1 学分'), findsOneWidget);
+
+      // Verify cards are rectangular Containers with proper borders
+      final containers = tester.widgetList<Container>(
+        find.descendant(
+          of: find.byType(CourseRightPanel),
+          matching: find.byType(Container),
+        ),
+      );
+
+      final courseContainers = containers.where((c) {
+        final dec = c.decoration;
+        if (dec is BoxDecoration && dec.borderRadius == BorderRadius.circular(4)) {
+          return true;
+        }
+        return false;
+      }).toList();
+
+      expect(courseContainers.length, 2);
+
+      // Created course has gold border
+      final createdBox = courseContainers[0].decoration as BoxDecoration;
+      expect(createdBox.border?.top.color, gold.withValues(alpha: .55));
+      expect(createdBox.color, paperCard);
+
+      // Uncreated course has grey ink border
+      final uncreatedBox = courseContainers[1].decoration as BoxDecoration;
+      expect(uncreatedBox.border?.top.color, ink.withValues(alpha: .14));
+      expect(uncreatedBox.color, paperCard);
+
+      // Tap on uncreated course triggers onSelect
+      await tester.tap(find.text('A 轮滑（初级）'));
+      await tester.pumpAndSettle();
+      expect(selectedCourse?['name'], 'A 轮滑（初级）');
+    },
+  );
+
+  testWidgets(
+    'Unselected courses do not appear on TimetableView and display 未选中 badge in CourseRightPanel',
+    (tester) async {
+      tester.view.physicalSize = const Size(1200, 900);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      // 1. Timetable test: unselected course is NOT rendered
+      final selectedEntry = TimetableEntry(
+        id: 'c1',
+        courseName: '操作系统',
+        teacher: '张老师',
+        location: '曹光彪101',
+        weekday: 1,
+        startSection: 1,
+        endSection: 2,
+        weeks: [1, 2, 3],
+        credit: 4.0,
+        subSemester: '秋',
+        selected: true,
+      );
+      final unselectedEntry = TimetableEntry(
+        id: 'c2',
+        courseName: '退选课程测试',
+        teacher: '李老师',
+        location: '玉泉田径场',
+        weekday: 1,
+        startSection: 3,
+        endSection: 4,
+        weeks: [1, 2, 3],
+        credit: 2.0,
+        subSemester: '秋',
+        selected: false,
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: paperTheme(),
+          home: Scaffold(
+            body: TimetableView(
+              entries: [selectedEntry, unselectedEntry],
+              semester: '2024-2025-1',
+              wide: true,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('操作系统'), findsOneWidget);
+      expect(find.text('退选课程测试'), findsNothing);
+
+      // 2. CourseRightPanel test:
+      // - selected + created: gold border, no status badge
+      // - selected + uncreated: grey border, 未建课 badge
+      // - unselected: grey border, 未选中 badge
+      // - sorting: selected+created -> selected+uncreated -> unselected
+      final testData = {
+        'semesters': [
+          {'id': '2024-2025-1', 'name': '2024-2025学年秋冬学期'},
+        ],
+        'courses': [
+          {
+            'id': 'u1',
+            'name': 'Z 未选课程',
+            'semesterId': '2024-2025-1',
+            'credit': 2.0,
+            'selected': false,
+            'learningZjuCreated': true,
+          },
+          {
+            'id': 's_uncreated',
+            'name': 'M 选中未建课',
+            'semesterId': '2024-2025-1',
+            'credit': 1.5,
+            'selected': true,
+            'learningZjuCreated': false,
+          },
+          {
+            'id': 's_created',
+            'name': 'A 选中且建课',
+            'semesterId': '2024-2025-1',
+            'credit': 3.0,
+            'selected': true,
+            'learningZjuCreated': true,
+          },
+        ],
+        'grades': <Json>[],
+      };
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: paperTheme(),
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: CourseRightPanel(
+                data: testData,
+                selected: '2024-2025-1',
+                onChanged: (_) {},
+                onSelect: (_) {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('A 选中且建课'), findsOneWidget);
+      expect(find.text('M 选中未建课'), findsOneWidget);
+      expect(find.text('Z 未选课程'), findsOneWidget);
+
+      // Badges
+      expect(find.text('未选中'), findsOneWidget);
+      expect(find.text('未建课'), findsOneWidget);
+
+      // Sorting: A 选中且建课 -> M 选中未建课 -> Z 未选课程
+      final posCreated = tester.getTopLeft(find.text('A 选中且建课')).dy;
+      final posUncreated = tester.getTopLeft(find.text('M 选中未建课')).dy;
+      final posUnselected = tester.getTopLeft(find.text('Z 未选课程')).dy;
+      expect(posCreated < posUncreated, isTrue);
+      expect(posUncreated < posUnselected, isTrue);
+    },
+  );
+
+  testWidgets(
+    'CourseDetailSheet displays 未选中 in meta row and 教务网未选中此课程 in tab row for unselected course',
+    (tester) async {
+      final db = AgentDatabase.memory();
+      addTearDown(() => db.close());
+      final secrets = _FakeSecrets();
+      final campus = CampusService(CampusSession(secrets), db);
+      final tempDir = Directory.systemTemp.createTempSync(
+        'unselected_course_test_',
+      );
+      addTearDown(() => tempDir.deleteSync(recursive: true));
+      final files = FileService(campus, tempDir);
+      final backups = BackupService(db, files);
+      final agent = AgentService(campus, files, GuideIndex(const {}));
+      final services = AppServices(db, secrets, campus, files, backups, agent);
+
+      final now = DateTime.now().toUtc().toIso8601String();
+      await db.put('cache', 'courses', {
+        'items': [
+          {'id': 'c_unsel_1', 'name': '旁听进阶课'},
+        ],
+        'updatedAt': now,
+      });
+      await db.put('cache', 'materials:c_unsel_1', {
+        'items': <Json>[],
+        'updatedAt': now,
+      });
+      await db.put('cache', 'assignments:c_unsel_1', {
+        'items': <Json>[],
+        'updatedAt': now,
+      });
+
+      final unselectedCourse = {
+        'id': 'c_unsel_1',
+        'name': '旁听进阶课',
+        'teacher': '赵老师',
+        'location': '西溪校区',
+        'credit': 2.0,
+        'selected': false,
+        'learningZjuCreated': true,
+      };
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: paperTheme(),
+          home: Scaffold(
+            body: CourseDetailSheet(
+              services: services,
+              course: unselectedCourse,
+              onDownload: (_) async {},
+              onPreview: (_) async {},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('旁听进阶课'), findsOneWidget);
+      expect(find.text('未选中'), findsOneWidget);
+      expect(find.text('教务网未选中此课程'), findsOneWidget);
+    },
+  );
+
+  test('isCourseSelected and parseTimetable accurately identify 待筛选 as unselected', () {
+    // 1. Course with status 待筛选
+    expect(
+      isCourseSelected({
+        'name': '大学物理',
+        'xkzt': '待筛选',
+      }),
+      isFalse,
+    );
+
+    // 2. Course with name containing 待筛选
+    expect(
+      isCourseSelected({
+        'name': '线性代数（待筛选）',
+      }),
+      isFalse,
+    );
+
+    // 3. parseTimetable with 待筛选 in kcb second segment
+    final entry1 = parseTimetable({
+      'kcb': '微积分（1）<br>第1志愿(待筛选)<br>苏德矿<br>西1-101zwf',
+      'xqj': '1',
+      'djj': '1',
+      'skcd': '2',
+      'dsz': '2',
+      'xxq': '秋',
+    }, '2024-2025-1');
+    expect(entry1, isNotNull);
+    expect(entry1!.selected, isFalse);
+
+    // 4. parseTimetable with xkzt: 待筛选
+    final entry2 = parseTimetable({
+      'kcb': '离散数学<br>教学班1<br>李老师<br>曹101zwf',
+      'xqj': '2',
+      'djj': '3',
+      'skcd': '2',
+      'dsz': '2',
+      'xxq': '秋',
+      'xkzt': '待筛选',
+    }, '2024-2025-1');
+    expect(entry2, isNotNull);
+    expect(entry2!.selected, isFalse);
+
+    // 5. Normal enrolled course
+    final entry3 = parseTimetable({
+      'kcb': '数据结构<br>教学班1<br>张老师<br>曹102zwf',
+      'xqj': '3',
+      'djj': '1',
+      'skcd': '2',
+      'dsz': '2',
+      'xxq': '秋',
+    }, '2024-2025-1');
+    expect(entry3, isNotNull);
+    expect(entry3!.selected, isTrue);
+  });
+
+  test('cleanCourseExtraSuffix cleans unparenthesized time and class suffixes and matches correctly in loadCourseOverview', () async {
+    // 1. cleanCourseExtraSuffix tests
+    expect(cleanCourseExtraSuffix('大学物理实验2026周一345'), '大学物理实验');
+    expect(cleanCourseExtraSuffix('大学物理实验周一345'), '大学物理实验');
+    expect(cleanCourseExtraSuffix('计算机系统Ⅱ2026秋冬'), '计算机系统Ⅱ');
+    expect(cleanCourseExtraSuffix('大学物理实验（周一3-5节）'), '大学物理实验');
+    expect(cleanCourseExtraSuffix('大学物理实验（01班）'), '大学物理实验');
+    expect(cleanCourseExtraSuffix('大学物理实验01班'), '大学物理实验');
+
+    final db = AgentDatabase.memory();
+    addTearDown(() => db.close());
+    final secrets = _FakeSecrets();
+    final campus = CampusService(CampusSession(secrets), db);
+    final tempDir = Directory.systemTemp.createTempSync('overview_pending_test_');
+    addTearDown(() => tempDir.deleteSync(recursive: true));
+    final files = FileService(campus, tempDir);
+    final backups = BackupService(db, files);
+    final agent = AgentService(campus, files, GuideIndex(const {}));
+    final services = AppServices(db, secrets, campus, files, backups, agent);
+
+    final currentSem = '2026-2027-1';
+
+    // Mock semesters
+    await db.put('cache', 'semesters', {
+      'items': [
+        {'id': '85', 'name': '2026-2027秋冬'},
+      ],
+      'updatedAt': DateTime.now().toUtc().toIso8601String(),
+    });
+
+    // Mock Learning at ZJU courses (only confirmed courses are in Canvas)
+    await db.put('cache', 'courses', {
+      'items': [
+        {
+          'id': '99651',
+          'name': '大学物理实验2026周一345',
+          'semesterId': '85',
+          'courseCode': 'uuid-phy-lab',
+          'teacher': '肖老师',
+        },
+        {
+          'id': '99472',
+          'name': '人工智能引论',
+          'semesterId': '85',
+          'courseCode': '(2026-2027-1)-CS2065M',
+          'teacher': '章老师',
+        },
+      ],
+      'updatedAt': DateTime.now().toUtc().toIso8601String(),
+    });
+
+    // Mock ZDBK enrolled courses (contains confirmed courses AND pending screening choices)
+    await db.put('cache', 'enrolled_courses:all', {
+      'items': [
+        {
+          'courseName': '大学物理实验',
+          'semester': currentSem,
+          'credit': 1.5,
+          'teacher': '肖老师',
+          'xkkh': '(2026-2027-1)-PHY2005G-1',
+        },
+        {
+          'courseName': '人工智能引论',
+          'semester': currentSem,
+          'credit': 3.5,
+          'teacher': '章老师',
+          'xkkh': '(2026-2027-1)-CS2065M-1',
+          'sfqd': '1',
+        },
+        {
+          'courseName': '高等数学进阶', // 已选中但未在学在浙大建课的课程
+          'semester': currentSem,
+          'credit': 2.0,
+          'teacher': '陈老师',
+          'xkkh': '(2026-2027-1)-MATH2001G-1',
+          'sfqd': '1',
+        },
+        {
+          'courseName': '轮滑（初级）', // 待筛选体育课 (sfqd == '0')
+          'semester': currentSem,
+          'credit': 1.0,
+          'teacher': '刘老师',
+          'xkkh': '(2026-2027-1)-PPAE0077G-2',
+          'sfqd': '0',
+        },
+        {
+          'courseName': '无线电测向（初级）', // 待筛选体育课第2志愿 (sfqd == '0')
+          'semester': currentSem,
+          'credit': 1.0,
+          'teacher': '朱老师',
+          'xkkh': '(2026-2027-1)-PPAE0051G-4',
+          'sfqd': '0',
+        },
+      ],
+      'updatedAt': DateTime.now().toUtc().toIso8601String(),
+    });
+
+    // Mock timetable
+    await db.put('cache', 'timetable:$currentSem', {
+      'items': [
+        {
+          'id': 'phy-lab-1-3',
+          'courseName': '大学物理实验',
+          'weekday': 1,
+          'startSection': 3,
+          'endSection': 5,
+          'teacher': '肖老师',
+          'location': '东4-212',
+          'semester': currentSem,
+          'subSemester': '秋冬',
+          'weeks': <int>[],
+          'credit': 1.5,
+          'selected': true,
+          'sfqd': '1',
+        },
+        {
+          'id': 'math-adv-2-1',
+          'courseName': '高等数学进阶',
+          'weekday': 2,
+          'startSection': 1,
+          'endSection': 2,
+          'teacher': '陈老师',
+          'location': '西1-101',
+          'semester': currentSem,
+          'subSemester': '秋冬',
+          'weeks': <int>[],
+          'credit': 2.0,
+          'selected': true,
+          'sfqd': '1',
+        },
+        {
+          'id': 'roller-1-9',
+          'courseName': '轮滑（初级）',
+          'weekday': 1,
+          'startSection': 9,
+          'endSection': 10,
+          'teacher': '刘老师',
+          'location': '篮球场',
+          'semester': currentSem,
+          'subSemester': '秋冬',
+          'weeks': <int>[],
+          'credit': 1.0,
+          'selected': false,
+          'sfqd': '0',
+        },
+      ],
+      'updatedAt': DateTime.now().toUtc().toIso8601String(),
+    });
+
+    final overview = await loadCourseOverview(services, currentSem);
+    final overviewCourses = rows(overview['courses']);
+
+    // 1. 大学物理实验2026周一345: 已选中且已建课 (selected: true, learningZjuCreated: true)
+    final phyLab = overviewCourses.firstWhere((c) => c['name'] == '大学物理实验');
+    expect(phyLab['learningZjuCreated'], isTrue, reason: '大学物理实验 should match 大学物理实验2026周一345');
+    expect(phyLab['selected'], isTrue, reason: '大学物理实验 is enrolled and confirmed');
+    expect(phyLab['id'], '99651');
+
+    // 2. 高等数学进阶: 已选中但未建课 (selected: true, learningZjuCreated: false)
+    // 教师尚未在学在浙大建课，但教务网已中签确定，绝不应被降级为未选中！
+    final mathAdv = overviewCourses.firstWhere((c) => c['name'] == '高等数学进阶');
+    expect(mathAdv['learningZjuCreated'], isFalse, reason: '学在浙大未建课');
+    expect(mathAdv['selected'], isTrue, reason: '教务网已确定中签 (sfqd: 1)，必须是已选中');
+
+    // 3. 轮滑（初级）and 无线电测向（初级）: sfqd == '0'，识别为待筛选 (selected: false)
+    final roller = overviewCourses.firstWhere((c) => c['name'] == '轮滑（初级）');
+    expect(roller['learningZjuCreated'], isFalse);
+    expect(roller['selected'], isFalse, reason: '轮滑（初级）is pending screening (待筛选, sfqd: 0)');
+
+    final radio = overviewCourses.firstWhere((c) => c['name'] == '无线电测向（初级）');
+    expect(radio['learningZjuCreated'], isFalse);
+    expect(radio['selected'], isFalse, reason: '无线电测向（初级）is pending screening (待筛选, sfqd: 0)');
+
+    // 4. Timetable loader: 已选中（建课与未建课）均上课表，待筛选 (sfqd: 0) 绝不上课表
+    final coursesPageData = await loadCoursesPage(services, currentSem);
+    final ttList = rows(coursesPageData['timetable']);
+    expect(ttList.any((e) => e['courseName'] == '大学物理实验'), isTrue);
+    expect(ttList.any((e) => e['courseName'] == '高等数学进阶'), isTrue, reason: '已选中未建课的课程必须正常展示在课表上');
+    expect(ttList.any((e) => e['courseName'] == '轮滑（初级）'), isFalse, reason: '待筛选课程不得出现在课程表上');
+  });
 
   testWidgets('课程页学期总览可收起，并在窄栏上重新展开', (tester) async {
     tester.view.physicalSize = const Size(1200, 900);

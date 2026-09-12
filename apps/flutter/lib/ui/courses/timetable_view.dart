@@ -1,6 +1,4 @@
-import 'dart:math' as math;
-import 'dart:ui' show PointerDeviceKind;
-
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 import '../../domain/course_catalog.dart';
@@ -44,11 +42,19 @@ class TimetableView extends StatefulWidget {
 
 class _TimetableViewState extends State<TimetableView> {
   String _selectedSubSemester = '';
+  final ScrollController _tabsScrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _tabsScrollController.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
     super.initState();
-    final choices = getSubSemesterChoices(widget.semester, widget.entries);
+    final active = widget.entries.where((e) => e.selected).toList();
+    final choices = getSubSemesterChoices(widget.semester, active);
     _selectedSubSemester = choices.isNotEmpty ? choices.first.id : '';
   }
 
@@ -56,18 +62,20 @@ class _TimetableViewState extends State<TimetableView> {
   void didUpdateWidget(TimetableView oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.semester != widget.semester) {
-      final choices = getSubSemesterChoices(widget.semester, widget.entries);
+      final active = widget.entries.where((e) => e.selected).toList();
+      final choices = getSubSemesterChoices(widget.semester, active);
       _selectedSubSemester = choices.isNotEmpty ? choices.first.id : '';
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final subChoices = getSubSemesterChoices(widget.semester, widget.entries);
+    final activeEntries = widget.entries.where((e) => e.selected).toList();
+    final subChoices = getSubSemesterChoices(widget.semester, activeEntries);
     final effectiveSub = subChoices.any((c) => c.id == _selectedSubSemester)
         ? _selectedSubSemester
         : (subChoices.isNotEmpty ? subChoices.first.id : '');
-    final filtered = filterTimetableBySubSemester(widget.entries, effectiveSub);
+    final filtered = filterTimetableBySubSemester(activeEntries, effectiveSub);
     final merged = mergeTimetable(filtered);
     final courses = merged.map((e) => e.courseName).toSet().toList();
     final showHeader = !widget.isExporting;
@@ -109,7 +117,7 @@ class _TimetableViewState extends State<TimetableView> {
             _subSemesterBar(subChoices, effectiveSub, isMobile),
             const SizedBox(height: 10),
           ],
-          if (widget.entries.isEmpty)
+          if (activeEntries.isEmpty)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 48),
               child: PageEmpty(icon: 'calendar-grid', title: '该学期暂无课表数据'),
@@ -213,209 +221,124 @@ class _TimetableViewState extends State<TimetableView> {
 
   Widget _header(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
-      final compactActions = constraints.maxWidth < 620;
-      final tabAreaWidth = compactActions
-          ? math.max(120.0, constraints.maxWidth - 120)
-          : constraints.maxWidth * 0.5;
+      final compactActions = constraints.maxWidth < 700;
 
-      final count = widget.choices.length;
-      final spacing = count > 4 ? 4.0 : 6.0;
-      final estimatedNaturalWidth =
-          count * 95.0 + math.max(0, count - 1) * spacing;
-      final needAdaptive =
-          !compactActions && (estimatedNaturalWidth > tabAreaWidth);
-
-      Widget tabsWidget;
-      if (compactActions) {
-        tabsWidget = SizedBox(
-          width: tabAreaWidth,
-          child: ScrollConfiguration(
-            behavior: ScrollConfiguration.of(context).copyWith(
-              scrollbars: false,
-              dragDevices: {
-                PointerDeviceKind.touch,
-                PointerDeviceKind.mouse,
-                PointerDeviceKind.trackpad,
-              },
+      final actions = Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (compactActions) ...[
+            IconButton(
+              onPressed: widget.entries.isEmpty ? null : widget.onExportPng,
+              tooltip: '导出图片',
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.image_outlined, size: 18),
             ),
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              physics: const BouncingScrollPhysics(),
-              child: Row(
-                children: [
-                  for (final choice in widget.choices) ...[
-                    _semesterTab(choice, compact: true),
-                    const SizedBox(width: 6),
-                  ],
-                ],
+            IconButton(
+              onPressed: widget.entries.isEmpty ? null : widget.onExportXlsx,
+              tooltip: '导出 Excel',
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.table_chart_outlined, size: 18),
+            ),
+            IconButton(
+              onPressed: widget.refreshing ? null : widget.onRefresh,
+              tooltip: '刷新课表',
+              visualDensity: VisualDensity.compact,
+              icon: widget.refreshing
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: blue,
+                      ),
+                    )
+                  : const Icon(Icons.refresh, size: 18),
+            ),
+          ] else ...[
+            TextButton.icon(
+              onPressed: widget.entries.isEmpty ? null : widget.onExportPng,
+              icon: const Icon(Icons.image_outlined, size: 16),
+              label: const Text('导出图片'),
+              style: TextButton.styleFrom(
+                foregroundColor: ink,
+                visualDensity: VisualDensity.compact,
               ),
             ),
-          ),
-        );
-      } else if (needAdaptive) {
-        final widthPerTab =
-            (tabAreaWidth - math.max(0, count - 1) * spacing) / count;
-        tabsWidget = SizedBox(
-          width: tabAreaWidth,
-          child: Row(
-            children: [
-              for (var i = 0; i < count; i++) ...[
-                if (i > 0) SizedBox(width: spacing),
-                Expanded(
-                  child: _adaptiveSemesterTab(
-                    widget.choices[i],
-                    availableWidth: widthPerTab,
-                  ),
-                ),
+            const SizedBox(width: 4),
+            TextButton.icon(
+              onPressed: widget.entries.isEmpty ? null : widget.onExportXlsx,
+              icon: const Icon(Icons.table_chart_outlined, size: 16),
+              label: const Text('导出 Excel'),
+              style: TextButton.styleFrom(
+                foregroundColor: ink,
+                visualDensity: VisualDensity.compact,
+              ),
+            ),
+            const SizedBox(width: 4),
+            IconButton(
+              onPressed: widget.refreshing ? null : widget.onRefresh,
+              tooltip: '刷新课表',
+              icon: widget.refreshing
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: blue,
+                      ),
+                    )
+                  : const Icon(Icons.refresh, size: 18),
+            ),
+          ],
+        ],
+      );
+
+      final tabsWidget = Listener(
+        onPointerSignal: (pointerSignal) {
+          if (pointerSignal is PointerScrollEvent &&
+              _tabsScrollController.hasClients) {
+            final delta = pointerSignal.scrollDelta.dy != 0
+                ? pointerSignal.scrollDelta.dy
+                : pointerSignal.scrollDelta.dx;
+            if (delta != 0) {
+              final target = (_tabsScrollController.offset + delta).clamp(
+                0.0,
+                _tabsScrollController.position.maxScrollExtent,
+              );
+              _tabsScrollController.jumpTo(target);
+            }
+          }
+        },
+        child: ScrollConfiguration(
+          behavior: const NoScrollbarScrollBehavior(),
+          child: SingleChildScrollView(
+            controller: _tabsScrollController,
+            scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (var i = 0; i < widget.choices.length; i++) ...[
+                  if (i > 0) const SizedBox(width: 6),
+                  _semesterTab(widget.choices[i], compact: compactActions),
+                ],
               ],
-            ],
+            ),
           ),
-        );
-      } else {
-        tabsWidget = ConstrainedBox(
-          constraints: BoxConstraints(maxWidth: tabAreaWidth),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              for (var i = 0; i < count; i++) ...[
-                if (i > 0) const SizedBox(width: 6),
-                _semesterTab(widget.choices[i], compact: false),
-              ],
-            ],
-          ),
-        );
-      }
+        ),
+      );
 
       return Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          tabsWidget,
-          const Spacer(),
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (compactActions) ...[
-                IconButton(
-                  onPressed: widget.entries.isEmpty ? null : widget.onExportPng,
-                  tooltip: '导出图片',
-                  visualDensity: VisualDensity.compact,
-                  icon: const Icon(Icons.image_outlined, size: 18),
-                ),
-                IconButton(
-                  onPressed: widget.entries.isEmpty
-                      ? null
-                      : widget.onExportXlsx,
-                  tooltip: '导出 Excel',
-                  visualDensity: VisualDensity.compact,
-                  icon: const Icon(Icons.table_chart_outlined, size: 18),
-                ),
-                IconButton(
-                  onPressed: widget.refreshing ? null : widget.onRefresh,
-                  tooltip: '刷新课表',
-                  visualDensity: VisualDensity.compact,
-                  icon: widget.refreshing
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: blue,
-                          ),
-                        )
-                      : const Icon(Icons.refresh, size: 18),
-                ),
-              ] else ...[
-                TextButton.icon(
-                  onPressed: widget.entries.isEmpty ? null : widget.onExportPng,
-                  icon: const Icon(Icons.image_outlined, size: 16),
-                  label: const Text('导出图片'),
-                  style: TextButton.styleFrom(
-                    foregroundColor: ink,
-                    visualDensity: VisualDensity.compact,
-                  ),
-                ),
-                const SizedBox(width: 4),
-                TextButton.icon(
-                  onPressed: widget.entries.isEmpty
-                      ? null
-                      : widget.onExportXlsx,
-                  icon: const Icon(Icons.table_chart_outlined, size: 16),
-                  label: const Text('导出 Excel'),
-                  style: TextButton.styleFrom(
-                    foregroundColor: ink,
-                    visualDensity: VisualDensity.compact,
-                  ),
-                ),
-                const SizedBox(width: 4),
-                IconButton(
-                  onPressed: widget.refreshing ? null : widget.onRefresh,
-                  tooltip: '刷新课表',
-                  icon: widget.refreshing
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: blue,
-                          ),
-                        )
-                      : const Icon(Icons.refresh, size: 18),
-                ),
-              ],
-            ],
-          ),
+          Expanded(child: tabsWidget),
+          const SizedBox(width: 8),
+          actions,
         ],
       );
     },
   );
 
-  Widget _adaptiveSemesterTab(
-    SemesterChoice choice, {
-    required double availableWidth,
-  }) {
-    final isSelected = choice.id == widget.semester;
-    final horizontalPad = availableWidth < 70
-        ? 2.0
-        : (availableWidth < 90 ? 4.0 : 6.0);
-    final fontSize = availableWidth < 70
-        ? 10.5
-        : (availableWidth < 90 ? 11.0 : 12.0);
-
-    return InkWell(
-      onTap: () {
-        if (choice.id != widget.semester) {
-          widget.onSemesterChanged?.call(choice.id);
-        }
-      },
-      borderRadius: BorderRadius.circular(6),
-      child: Container(
-        height: 32,
-        padding: EdgeInsets.symmetric(horizontal: horizontalPad, vertical: 5),
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: isSelected ? blue.withValues(alpha: .14) : Colors.transparent,
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(
-            color: isSelected ? blue : ink.withValues(alpha: .18),
-            width: isSelected ? 1.5 : 1,
-          ),
-        ),
-        child: FittedBox(
-          fit: BoxFit.scaleDown,
-          child: Text(
-            choice.name,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: fontSize,
-              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-              color: isSelected ? blue : ink,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 
   Widget _semesterTab(SemesterChoice choice, {bool compact = false}) {
     final isSelected = choice.id == widget.semester;
@@ -441,14 +364,17 @@ class _TimetableViewState extends State<TimetableView> {
             width: isSelected ? 1.5 : 1,
           ),
         ),
-        child: Text(
-          choice.name,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            fontSize: compact ? 12 : 13,
-            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-            color: isSelected ? blue : ink,
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(
+            choice.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: compact ? 12 : 13,
+              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+              color: isSelected ? blue : ink,
+            ),
           ),
         ),
       ),

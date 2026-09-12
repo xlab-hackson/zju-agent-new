@@ -58,3 +58,4 @@ downloads/
 **/android/local.properties
 **/android/.gradle/
 **/windows/flutter/ephemeral/
+foragent/

@@ -28,5 +28,7 @@ Future<Json> loadDownloadsPage(AppServices s, {bool refresh = false}) async {
     'items': items,
     'courses': downloadCourses,
     'downloadDir': s.files.root.path,
+    'defaultDownloadDir': s.files.defaultRoot.path,
+    'isCustomDownloadDir': s.files.isCustomDirectory,
   };
 }

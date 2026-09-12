@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 import '../../domain/course_catalog.dart';
@@ -53,10 +54,11 @@ class CourseRightPanel extends StatelessWidget {
           : text(c, 'semester').trim();
       groups.putIfAbsent(key, () => []).add(c);
     }
+    final selectedCourses = courses.where(_isSelected).toList();
     final panelStats = computeSemesterGradeStats(
       selected: selected,
-      courses: courses,
-      allCourses: allCourses,
+      courses: selectedCourses,
+      allCourses: allCourses.where(_isSelected).toList(),
       allGrades: allGrades,
       matchingIds: matchingIds,
     );
@@ -122,7 +124,11 @@ class CourseRightPanel extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 8),
-        _buildSemesterTabs(context, choices),
+        _HorizontalSemesterTabs(
+          choices: choices,
+          selected: selected,
+          onChanged: onChanged,
+        ),
         if (updatedLabel != null) ...[
           const SizedBox(height: 4),
           Align(
@@ -150,304 +156,221 @@ class CourseRightPanel extends StatelessWidget {
             const SizedBox(height: 6),
             for (final course
                 in (group.value
-                  ..sort((a, b) => text(a, 'name').compareTo(text(b, 'name')))))
+                  ..sort((a, b) {
+                    final aSelected = _isSelected(a);
+                    final bSelected = _isSelected(b);
+                    if (aSelected != bSelected) {
+                      return aSelected ? -1 : 1;
+                    }
+                    final aCreated = _isCreated(a);
+                    final bCreated = _isCreated(b);
+                    if (aCreated != bCreated) {
+                      return aCreated ? -1 : 1;
+                    }
+                    return text(a, 'name').compareTo(text(b, 'name'));
+                  })))
               _buildCourseItem(course),
           ],
       ],
     );
   }
 
+  static bool _isSelected(Json course) => isCourseSelected(course);
+
+  static bool _isCreated(Json course) =>
+      course['learningZjuCreated'] == true ||
+      (course['learningZjuCreated'] != false &&
+          text(course, 'id').isNotEmpty &&
+          !text(course, 'id').startsWith('(') &&
+          int.tryParse(text(course, 'id')) != null);
+
   Widget _buildCourseItem(Json course) {
-    final teacher = text(course, 'teacher');
+    final teacher = text(course, 'teacher', text(course, 'jsxm')).trim();
     final creditVal = double.tryParse('${course['credit']}') ?? 0.0;
     final score = text(course, 'score', text(course, 'original')).trim();
     final gpa = text(course, 'gpa', text(course, 'fivePoint')).trim();
     final gradeBadge = formatGradeBadge(score, gpa);
-    final isLearningCreated =
-        course['learningZjuCreated'] == true ||
-        (course['learningZjuCreated'] != false &&
-            text(course, 'id').isNotEmpty &&
-            !text(course, 'id').startsWith('(') &&
-            int.tryParse(text(course, 'id')) != null);
+    final isSelected = _isSelected(course);
+    final isLearningCreated = _isCreated(course);
+    final isEnrolledAndCreated = isSelected && isLearningCreated;
+    final statusBadge =
+        !isSelected ? '未选中' : (!isLearningCreated ? '未建课' : '');
+
+    final scheduleTime = text(course, 'scheduleTime').trim();
+    final teachingClassName = text(course, 'teachingClassName').trim();
+    final fallbackTime = text(course, 'time').trim();
+    final timeStr = scheduleTime.isNotEmpty
+        ? scheduleTime
+        : (fallbackTime.isNotEmpty ? fallbackTime : teachingClassName);
+
+    final borderColor = isEnrolledAndCreated
+        ? gold.withValues(alpha: .55)
+        : ink.withValues(alpha: .14);
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
-      child: SizedBox(
-        width: double.infinity,
-        child: OutlinedButton(
-          onPressed: () => onSelect(course),
-          style: OutlinedButton.styleFrom(
-            alignment: Alignment.centerLeft,
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-            side: BorderSide(color: ink.withValues(alpha: .12)),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
+      child: Container(
+        decoration: BoxDecoration(
+          color: paperCard,
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: borderColor),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x0a0e1c38),
+              offset: Offset(0, 1),
+              blurRadius: 1,
+            ),
+          ],
+        ),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(4),
+            onTap: () => onSelect(course),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    child: Text(
-                      text(course, 'name'),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: ink,
-                      ),
-                    ),
-                  ),
-                  if (!isLearningCreated) ...[
-                    const SizedBox(width: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 5,
-                        vertical: 1.5,
-                      ),
-                      decoration: BoxDecoration(
-                        color: ink.withValues(alpha: .06),
-                        borderRadius: BorderRadius.circular(3),
-                      ),
-                      child: Text(
-                        '未建课',
-                        style: TextStyle(
-                          fontSize: 9.5,
-                          color: ink.withValues(alpha: .5),
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
-                  ],
-                  if (gradeBadge.isNotEmpty) ...[
-                    const SizedBox(width: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 5,
-                        vertical: 1.5,
-                      ),
-                      decoration: BoxDecoration(
-                        color: seal.withValues(alpha: .08),
-                        borderRadius: BorderRadius.circular(3),
-                        border: Border.all(color: seal.withValues(alpha: .2)),
-                      ),
-                      child: Text(
-                        gradeBadge,
-                        style: const TextStyle(
-                          fontSize: 9.5,
-                          color: seal,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-              if (teacher.isNotEmpty || creditVal > 0)
-                Padding(
-                  padding: const EdgeInsets.only(top: 3),
-                  child: Row(
+                  Row(
                     children: [
-                      if (teacher.isNotEmpty) ...[
-                        Icon(
-                          Icons.person_outline,
-                          size: 11,
-                          color: isLearningCreated
-                              ? ink
-                              : ink.withValues(alpha: .5),
-                        ),
-                        const SizedBox(width: 3),
-                        Expanded(
-                          child: Text(
-                            teacher,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 10,
-                              color: isLearningCreated
-                                  ? ink
-                                  : ink.withValues(alpha: .5),
-                            ),
+                      Expanded(
+                        child: Text(
+                          text(course, 'name'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: ink,
                           ),
                         ),
-                      ] else
-                        const Spacer(),
-                      if (creditVal > 0)
+                      ),
+                      if (statusBadge.isNotEmpty) ...[
+                        const SizedBox(width: 6),
                         Container(
                           padding: const EdgeInsets.symmetric(
-                            horizontal: 4,
-                            vertical: 1,
+                            horizontal: 5,
+                            vertical: 1.5,
                           ),
                           decoration: BoxDecoration(
                             color: ink.withValues(alpha: .06),
                             borderRadius: BorderRadius.circular(3),
+                            border: Border.all(
+                              color: ink.withValues(alpha: .2),
+                            ),
                           ),
                           child: Text(
-                            '${creditVal.toStringAsFixed(creditVal.truncateToDouble() == creditVal ? 0 : 1)} 学分',
+                            statusBadge,
                             style: TextStyle(
-                              fontSize: 9,
-                              color: isLearningCreated
-                                  ? ink
-                                  : ink.withValues(alpha: .6),
-                              fontWeight: FontWeight.w500,
+                              fontSize: 9.5,
+                              color: ink.withValues(alpha: .65),
+                              fontWeight: FontWeight.bold,
                             ),
                           ),
                         ),
+                      ],
+                      if (gradeBadge.isNotEmpty) ...[
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 5,
+                            vertical: 1.5,
+                          ),
+                          decoration: BoxDecoration(
+                            color: seal.withValues(alpha: .08),
+                            borderRadius: BorderRadius.circular(3),
+                            border: Border.all(color: seal.withValues(alpha: .2)),
+                          ),
+                          child: Text(
+                            gradeBadge,
+                            style: const TextStyle(
+                              fontSize: 9.5,
+                              color: seal,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
-                ),
-              if (text(course, 'teachingClassName').isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 2),
-                  child: Text(
-                    text(course, 'teachingClassName'),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 10,
-                      color: isLearningCreated
-                          ? ink
-                          : ink.withValues(alpha: .5),
+                  if (teacher.isNotEmpty || creditVal > 0)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 3),
+                      child: Row(
+                        children: [
+                          if (teacher.isNotEmpty) ...[
+                            Icon(
+                              Icons.person_outline,
+                              size: 11,
+                              color: isEnrolledAndCreated
+                                  ? ink
+                                  : ink.withValues(alpha: .5),
+                            ),
+                            const SizedBox(width: 3),
+                            Expanded(
+                              child: Text(
+                                teacher,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  color: isEnrolledAndCreated
+                                      ? ink
+                                      : ink.withValues(alpha: .5),
+                                ),
+                              ),
+                            ),
+                          ] else
+                            const Spacer(),
+                          if (creditVal > 0)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 5,
+                                vertical: 1.5,
+                              ),
+                              decoration: BoxDecoration(
+                                color: ink.withValues(alpha: .06),
+                                borderRadius: BorderRadius.circular(3),
+                              ),
+                              child: Text(
+                                '${creditVal.toStringAsFixed(creditVal.truncateToDouble() == creditVal ? 0 : 1)} 学分',
+                                style: TextStyle(
+                                  fontSize: 10.5,
+                                  color: isEnrolledAndCreated
+                                      ? ink
+                                      : ink.withValues(alpha: .6),
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
                     ),
-                  ),
-                ),
-            ],
+                  if (timeStr.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Text(
+                        timeStr,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: isEnrolledAndCreated
+                              ? ink
+                              : ink.withValues(alpha: .5),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
           ),
         ),
       ),
     );
   }
 
-  Widget _buildSemesterTabs(
-    BuildContext context,
-    List<SemesterChoice> choices,
-  ) {
-    if (choices.isEmpty) return const SizedBox.shrink();
-
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final availableWidth = constraints.maxWidth;
-        final count = choices.length;
-
-        const spacing = 6.0;
-        final canFitSingleRow =
-            count <= 2 ||
-            (availableWidth - (count - 1) * spacing) / count >= 85.0;
-
-        if (canFitSingleRow) {
-          return Row(
-            children: [
-              for (var i = 0; i < count; i++) ...[
-                if (i > 0) const SizedBox(width: spacing),
-                Expanded(
-                  child: _panelTab(
-                    choices[i],
-                    isSelected: choices[i].id == selected,
-                    availableWidth:
-                        (availableWidth - (count - 1) * spacing) / count,
-                  ),
-                ),
-              ],
-            ],
-          );
-        }
-
-        // Otherwise split into at most 2 rows to keep within two lines
-        final row1Count = (count + 1) ~/ 2;
-        final row1 = choices.sublist(0, row1Count);
-        final row2 = choices.sublist(row1Count);
-
-        final widthPerItemRow1 =
-            (availableWidth - (row1.length - 1) * spacing) / row1.length;
-        final widthPerItemRow2 =
-            (availableWidth - (row2.length - 1) * spacing) / row2.length;
-
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              children: [
-                for (var i = 0; i < row1.length; i++) ...[
-                  if (i > 0) const SizedBox(width: spacing),
-                  Expanded(
-                    child: _panelTab(
-                      row1[i],
-                      isSelected: row1[i].id == selected,
-                      availableWidth: widthPerItemRow1,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                for (var i = 0; i < row2.length; i++) ...[
-                  if (i > 0) const SizedBox(width: spacing),
-                  Expanded(
-                    child: _panelTab(
-                      row2[i],
-                      isSelected: row2[i].id == selected,
-                      availableWidth: widthPerItemRow2,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Widget _panelTab(
-    SemesterChoice choice, {
-    required bool isSelected,
-    required double availableWidth,
-  }) {
-    final displayName = choice.id == 'all' ? '全部学期' : choice.name;
-    final horizontalPad = availableWidth < 70
-        ? 2.0
-        : (availableWidth < 90 ? 4.0 : 6.0);
-    final fontSize = availableWidth < 70
-        ? 10.5
-        : (availableWidth < 90 ? 11.0 : 12.0);
-
-    return InkWell(
-      onTap: () {
-        if (choice.id != selected) {
-          onChanged(choice.id);
-        }
-      },
-      borderRadius: BorderRadius.circular(6),
-      child: Container(
-        height: 32,
-        padding: EdgeInsets.symmetric(horizontal: horizontalPad),
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: isSelected ? blue.withValues(alpha: .14) : Colors.transparent,
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(
-            color: isSelected ? blue : ink.withValues(alpha: .18),
-            width: isSelected ? 1.5 : 1,
-          ),
-        ),
-        child: FittedBox(
-          fit: BoxFit.scaleDown,
-          child: Text(
-            displayName,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: fontSize,
-              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-              color: isSelected ? blue : ink,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 
   static String _formatCredit(double cr) {
     if (cr <= 0) return '0';
@@ -551,6 +474,141 @@ class CourseRightPanel extends StatelessWidget {
             style: TextStyle(fontSize: 10, color: ink.withValues(alpha: .6)),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _HorizontalSemesterTabs extends StatefulWidget {
+  final List<SemesterChoice> choices;
+  final String selected;
+  final ValueChanged<String> onChanged;
+
+  const _HorizontalSemesterTabs({
+    required this.choices,
+    required this.selected,
+    required this.onChanged,
+  });
+
+  @override
+  State<_HorizontalSemesterTabs> createState() => _HorizontalSemesterTabsState();
+}
+
+class _HorizontalSemesterTabsState extends State<_HorizontalSemesterTabs> {
+  late final ScrollController _scrollController;
+  final Map<String, GlobalKey> _itemKeys = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController = ScrollController();
+    _scrollToSelected();
+  }
+
+  @override
+  void didUpdateWidget(covariant _HorizontalSemesterTabs oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.selected != widget.selected) {
+      _scrollToSelected();
+    }
+  }
+
+  void _scrollToSelected() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final key = _itemKeys[widget.selected];
+      final ctx = key?.currentContext;
+      if (ctx != null && ctx.mounted) {
+        Scrollable.ensureVisible(
+          ctx,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeInOut,
+          alignment: 0.5,
+        );
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.choices.isEmpty) return const SizedBox.shrink();
+
+    return Listener(
+      onPointerSignal: (pointerSignal) {
+        if (pointerSignal is PointerScrollEvent &&
+            _scrollController.hasClients) {
+          final delta = pointerSignal.scrollDelta.dy != 0
+              ? pointerSignal.scrollDelta.dy
+              : pointerSignal.scrollDelta.dx;
+          if (delta != 0) {
+            final target = (_scrollController.offset + delta).clamp(
+              0.0,
+              _scrollController.position.maxScrollExtent,
+            );
+            _scrollController.jumpTo(target);
+          }
+        }
+      },
+      child: ScrollConfiguration(
+        behavior: const NoScrollbarScrollBehavior(),
+        child: SingleChildScrollView(
+          controller: _scrollController,
+          scrollDirection: Axis.horizontal,
+          physics: const BouncingScrollPhysics(),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (var i = 0; i < widget.choices.length; i++) ...[
+                if (i > 0) const SizedBox(width: 6),
+                _tabItem(widget.choices[i]),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _tabItem(SemesterChoice choice) {
+    final key = _itemKeys.putIfAbsent(choice.id, () => GlobalKey());
+    final isSelected = choice.id == widget.selected;
+    final displayName = choice.id == 'all' ? '全部学期' : choice.name;
+
+    return InkWell(
+      key: key,
+      onTap: () {
+        if (choice.id != widget.selected) {
+          widget.onChanged(choice.id);
+        }
+      },
+      borderRadius: BorderRadius.circular(6),
+      child: Container(
+        height: 32,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: isSelected ? blue.withValues(alpha: .14) : Colors.transparent,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: isSelected ? blue : ink.withValues(alpha: .18),
+            width: isSelected ? 1.5 : 1,
+          ),
+        ),
+        child: Text(
+          displayName,
+          maxLines: 1,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+            color: isSelected ? blue : ink,
+          ),
+        ),
       ),
     );
   }

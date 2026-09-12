@@ -21,8 +21,14 @@ mixin CourseOverviewState<T extends CampusDataPage> on CampusPageState<T> {
   // Modal routes do not rebuild when the page behind them calls setState.
   final overviewChanges = ValueNotifier<int>(0);
 
-  void _notifyOverviewChanged() {
+  void notifyOverviewChanged() {
     if (mounted) overviewChanges.value++;
+  }
+
+  void onOverviewSemesterChanged(String value) {
+    setState(() => overviewSemester = value);
+    syncPageContext();
+    notifyOverviewChanged();
   }
 
   @override
@@ -85,7 +91,7 @@ mixin CourseOverviewState<T extends CampusDataPage> on CampusPageState<T> {
       setState(() {
         overviewData = next;
       });
-      _notifyOverviewChanged();
+      notifyOverviewChanged();
     }
     try {
       await next;
@@ -94,7 +100,7 @@ mixin CourseOverviewState<T extends CampusDataPage> on CampusPageState<T> {
         setState(() {
           overviewData = previous;
         });
-        _notifyOverviewChanged();
+        notifyOverviewChanged();
       }
     }
   }
@@ -107,7 +113,7 @@ mixin CourseOverviewState<T extends CampusDataPage> on CampusPageState<T> {
       setState(() {
         overviewData = next;
       });
-      _notifyOverviewChanged();
+      notifyOverviewChanged();
     }
     try {
       await next;
@@ -116,7 +122,7 @@ mixin CourseOverviewState<T extends CampusDataPage> on CampusPageState<T> {
     } finally {
       if (mounted) {
         setState(() => _refreshingOverview = false);
-        _notifyOverviewChanged();
+        notifyOverviewChanged();
       } else {
         _refreshingOverview = false;
       }
@@ -167,15 +173,26 @@ mixin CourseOverviewState<T extends CampusDataPage> on CampusPageState<T> {
           }
           if (!snapshot.hasData) return const SizedBox.shrink();
           final d = snapshot.data!;
+          final choices = semesterChoices(rows(d['semesters'] ?? []));
+          var curSelected = overviewSemester;
+          if (!choices.any((c) => c.id == curSelected)) {
+            final activeChoice = choices.firstWhere(
+              (c) => c.id == semester,
+              orElse: () => choices.isNotEmpty
+                  ? (choices.firstWhere(
+                      (c) => c.id != 'all',
+                      orElse: () => choices.first,
+                    ))
+                  : const SemesterChoice('all', '全部学期'),
+            );
+            curSelected = activeChoice.id;
+            overviewSemester = curSelected;
+          }
           return CourseRightPanel(
             data: d,
-            selected: overviewSemester,
+            selected: curSelected,
             refreshing: _refreshingOverview,
-            onChanged: (value) {
-              setState(() => overviewSemester = value);
-              syncPageContext();
-              _notifyOverviewChanged();
-            },
+            onChanged: onOverviewSemesterChanged,
             onRefresh: refreshOverview,
             onSelect: courseDetail,
             onCollapse: onCollapse,
@@ -201,12 +218,12 @@ mixin CourseOverviewState<T extends CampusDataPage> on CampusPageState<T> {
             color: blue,
             backgroundColor: paperCard,
             onRefresh: refreshOverview,
-            child: SingleChildScrollView(
-              physics: const AlwaysScrollableScrollPhysics(),
-              // 右侧多留出滚动条宽度：桌面端 Scrollbar 画在滚动视图右缘，
-              // 内容不内缩就会被压住。
-              padding: const EdgeInsets.fromLTRB(20, 18, 34, 28),
-              child: FutureBuilder<Json>(
+            child: ScrollConfiguration(
+              behavior: const NoScrollbarScrollBehavior(),
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
+                child: FutureBuilder<Json>(
                 future: overviewData ??= loadOverview(
                   refresh: s.claimInitialRefresh('/courses:panel'),
                 ),
@@ -255,7 +272,12 @@ mixin CourseOverviewState<T extends CampusDataPage> on CampusPageState<T> {
                   if (!choices.any((c) => c.id == curSelected)) {
                     final activeChoice = choices.firstWhere(
                       (c) => c.id == semester,
-                      orElse: () => choices.first,
+                      orElse: () => choices.isNotEmpty
+                          ? (choices.firstWhere(
+                              (c) => c.id != 'all',
+                              orElse: () => choices.first,
+                            ))
+                          : const SemesterChoice('all', '全部学期'),
                     );
                     curSelected = activeChoice.id;
                     overviewSemester = curSelected;
@@ -264,11 +286,7 @@ mixin CourseOverviewState<T extends CampusDataPage> on CampusPageState<T> {
                     data: d,
                     selected: curSelected,
                     refreshing: _refreshingOverview,
-                    onChanged: (value) {
-                      setState(() => overviewSemester = value);
-                      syncPageContext();
-                      _notifyOverviewChanged();
-                    },
+                    onChanged: onOverviewSemesterChanged,
                     onRefresh: refreshOverview,
                     onSelect: (course) {
                       Navigator.of(ctx).pop();
@@ -281,6 +299,7 @@ mixin CourseOverviewState<T extends CampusDataPage> on CampusPageState<T> {
           ),
         ),
       ),
-    );
+    ),
+  );
   }
 }

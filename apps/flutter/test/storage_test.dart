@@ -215,4 +215,83 @@ void main() {
       expect((await db.list('messages')).length, 1);
     },
   );
+
+  test(
+    'FileService supports configuring custom download directory and resetting to default',
+    () async {
+      final customDir = await Directory.systemTemp.createTemp('zju_custom_dl_');
+      addTearDown(() => customDir.delete(recursive: true));
+
+      final campus = CampusService(CampusSession(MemorySecrets()), db);
+      final files = FileService(campus, root, defaultRoot: root);
+
+      expect(files.isCustomDirectory, isFalse);
+      expect(files.root.path, root.path);
+      expect(files.defaultRoot.path, root.path);
+
+      // Set custom directory
+      await files.setDownloadDirectory(customDir.path);
+      expect(files.isCustomDirectory, isTrue);
+      expect(files.root.path, customDir.path);
+
+      // Check persistence in settings:app
+      final settings = await db.get('settings', 'app');
+      expect(settings?['downloadDirectory'], customDir.path);
+
+      // Reset back to default
+      await files.setDownloadDirectory(null);
+      expect(files.isCustomDirectory, isFalse);
+      expect(files.root.path, root.path);
+      final resetSettings = await db.get('settings', 'app');
+      expect(resetSettings?.containsKey('downloadDirectory') ?? false, isFalse);
+    },
+  );
+
+  test(
+    'FileService file lookup checks recorded downloadDir and fallbacks',
+    () async {
+      final customDir = await Directory.systemTemp.createTemp('zju_custom_dl2_');
+      addTearDown(() => customDir.delete(recursive: true));
+
+      final campus = CampusService(CampusSession(MemorySecrets()), db);
+      final files = FileService(campus, customDir, defaultRoot: root);
+
+      // Create a file in default root (representing a previously downloaded file before changing dir)
+      final oldFile = File(confinedPath(root.path, '高等数学/ch1.pdf'));
+      await oldFile.parent.create(recursive: true);
+      await oldFile.writeAsString('old content');
+
+      // Create a file in customDir
+      final newFile = File(confinedPath(customDir.path, '线性代数/ch2.pdf'));
+      await newFile.parent.create(recursive: true);
+      await newFile.writeAsString('new content');
+
+      // 1. Record with explicit downloadDir matching root
+      final recOld = {
+        'id': 'd1',
+        'relativePath': '高等数学/ch1.pdf',
+        'downloadDir': root.path,
+      };
+      final resolvedOld = await files.file(recOld);
+      expect(resolvedOld.path, oldFile.path);
+
+      // 2. Record with no downloadDir (legacy), resolves from fallback defaultRoot
+      final recLegacy = {
+        'id': 'd2',
+        'relativePath': '高等数学/ch1.pdf',
+      };
+      final resolvedLegacy = await files.file(recLegacy);
+      expect(resolvedLegacy.path, oldFile.path);
+
+      // 3. Record in current custom root
+      final recNew = {
+        'id': 'd3',
+        'relativePath': '线性代数/ch2.pdf',
+        'downloadDir': customDir.path,
+      };
+      final resolvedNew = await files.file(recNew);
+      expect(resolvedNew.path, newFile.path);
+    },
+  );
 }
+

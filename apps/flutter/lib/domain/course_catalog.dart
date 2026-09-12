@@ -122,15 +122,26 @@ String cleanCourseExtraSuffix(String n) {
   String prev;
   do {
     prev = s;
-    // 仅去除末尾的学期标识，例如（2024-2025-1）、（2024-2025秋冬）、（2024-2025学年秋学期）
+    // 1. 去除末尾括号内的学期标识，例如（2024-2025-1）、（2024-2025秋冬）、（2024-2025学年秋学期）
     s = s.replaceAll(RegExp(r'（\d{4}-\d{4}[^）]*）$'), '').trim();
-    // 仅去除末尾的选课代码/教学班，例如（061B0170-01）、（CS101-01）、（教学班01）、（01班）
+    // 2. 去除末尾括号内的选课代码/教学班，例如（061B0170-01）、（CS101-01）、（教学班01）、（01班）
     s = s
         .replaceAll(
           RegExp(r'（(?:[A-Za-z0-9_]+-[A-Za-z0-9_]+|教学班\d+|\d+班)）$'),
           '',
         )
         .trim();
+    // 3. 去除末尾上课时间/年份后缀（如 2026周一345、周一345、2026秋冬、周二3-5节）
+    s = s
+        .replaceAll(
+          RegExp(
+            r'（?(?:20\d{2})?(?:秋冬|春夏|秋|冬|春|夏)?周[一二三四五六日]\d+(?:-\d+)?(?:节)?）?$',
+          ),
+          '',
+        )
+        .trim();
+    s = s.replaceAll(RegExp(r'（?20\d{2}(?:秋冬|春夏|秋|冬|春|夏)）?$'), '').trim();
+    s = s.replaceAll(RegExp(r'（?\d+班）?$'), '').trim();
   } while (s != prev);
   return s;
 }
@@ -199,4 +210,46 @@ String formatGradeBadge(String score, String gpa) {
     return '绩点 $gpa';
   }
   return '';
+}
+
+bool isCourseSelected(Json c) {
+  if (c['selected'] == false || c['enrolled'] == false) return false;
+  final sfqd = text(c, 'sfqd').trim();
+  if (sfqd == '0') return false;
+  final xkzt = text(
+    c,
+    'xkzt',
+    text(c, 'xkztmc', text(c, 'status', text(c, 'selectionStatus'))),
+  ).trim();
+  if (xkzt.contains('待筛选') ||
+      xkzt.contains('未筛选') ||
+      xkzt.contains('未选中') ||
+      xkzt.contains('退选') ||
+      xkzt.contains('落选')) {
+    return false;
+  }
+  if (text(c, 'sfxk').trim() == '0') return false;
+  final name = text(c, 'name', text(c, 'courseName', text(c, 'kcmc'))).trim();
+  if (name.contains('待筛选') ||
+      name.contains('未筛选') ||
+      name.contains('未选中') ||
+      name.contains('退选') ||
+      name.contains('落选')) {
+    return false;
+  }
+  final kcb = text(c, 'kcb').trim();
+  if (kcb.isNotEmpty) {
+    final m = RegExp(r'(.*?)<br>(.*?)<br>(.*?)<br>(.*?)zwf').firstMatch(kcb);
+    if (m != null) {
+      final mid = m[2]!.trim();
+      if (mid.contains('待筛选') ||
+          mid.contains('未筛选') ||
+          mid.contains('未选中') ||
+          mid.contains('退选') ||
+          mid.contains('落选')) {
+        return false;
+      }
+    }
+  }
+  return true;
 }

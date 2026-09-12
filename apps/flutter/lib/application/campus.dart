@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:html/parser.dart' as html;
 import '../data/campus_session.dart';
 import '../data/database.dart';
+import '../domain/course_catalog.dart';
 import '../domain/models.dart';
 import '../domain/schedule.dart';
 
@@ -409,6 +410,23 @@ class CampusService {
         final xf =
             double.tryParse(text(s, 'xf', text(s, 'XF', text(s, 'credit')))) ??
             0.0;
+        final sxkzt = text(
+          s,
+          'xkzt',
+          text(s, 'xkztmc', text(s, 'status', text(s, 'zt'))),
+        ).trim();
+        final ssfqd = text(s, 'sfqd').trim();
+        final isSjkUnselected = s['selected'] == false ||
+            s['enrolled'] == false ||
+            ssfqd == '0' ||
+            text(s, 'sfxk') == '0' ||
+            sxkzt.contains('待筛选') ||
+            sxkzt.contains('未筛选') ||
+            sxkzt.contains('未选中') ||
+            sxkzt.contains('退选') ||
+            sxkzt.contains('落选') ||
+            name.contains('待筛选') ||
+            name.contains('未选中');
         if (name.isNotEmpty) {
           entries.add(
             TimetableEntry(
@@ -422,6 +440,7 @@ class CampusService {
               semester: semester,
               subSemester: text(s, 'xxq', sub),
               credit: xf,
+              selected: !isSjkUnselected,
               weeks: const [],
             ),
           );
@@ -477,9 +496,26 @@ class CampusService {
           0.0;
       final teacher = text(
         e,
-        'xm',
-        text(e, 'jsxm', text(e, 'jsxx', text(e, 'teacher'))),
+        'jsxm',
+        text(e, 'jsxx', text(e, 'teacher')),
       ).trim();
+      final xkzt = text(
+        e,
+        'xkzt',
+        text(e, 'xkztmc', text(e, 'status', text(e, 'zt'))),
+      ).trim();
+      final sfqd = text(e, 'sfqd').trim();
+      final isEnrolledUnselected = e['selected'] == false ||
+          e['enrolled'] == false ||
+          sfqd == '0' ||
+          text(e, 'sfxk') == '0' ||
+          xkzt.contains('待筛选') ||
+          xkzt.contains('未筛选') ||
+          xkzt.contains('未选中') ||
+          xkzt.contains('退选') ||
+          xkzt.contains('落选') ||
+          rawName.contains('待筛选') ||
+          rawName.contains('未选中');
       result.add({
         'id': xkkh.isNotEmpty ? xkkh : rawName,
         'name': rawName,
@@ -487,6 +523,8 @@ class CampusService {
         'credit': credit,
         'semester': sem,
         'xkkh': xkkh,
+        'selected': !isEnrolledUnselected,
+        'enrolled': !isEnrolledUnselected,
         if (teacher.isNotEmpty) 'teacher': teacher,
         'time': parseExamTime(text(e, 'kssj')),
         'midtermTime': parseExamTime(text(e, 'qzkssj')),
@@ -749,7 +787,10 @@ class CampusService {
           );
       final info = dateInfo(current, config);
       firstDateInfo ??= info;
-      all.addAll(dailyEvents(current, config, table, tests, work));
+      final activeTable = table
+          .where((e) => e.selected && isCourseSelected(e.toJson()))
+          .toList();
+      all.addAll(dailyEvents(current, config, activeTable, tests, work));
     }
     final events = all.where((e) {
       final start = DateTime.parse('${e['date']}T${e['startTime']}:00Z'),
@@ -785,6 +826,7 @@ class CampusService {
       'semesters': allSemesters,
       'currentTimetable':
           (timetables[currentSemester] ?? const <TimetableEntry>[])
+              .where((e) => e.selected && isCourseSelected(e.toJson()))
               .map((entry) => entry.toJson())
               .toList(),
       'semesterIds': calendars.keys.toList(),
@@ -814,6 +856,30 @@ TimetableEntry? parseTimetable(
         text(r, 'xf', text(r, 'XF', text(r, 'cd_xf', text(r, 'credit')))),
       ) ??
       0.0;
+  final mid = m[2]!.trim();
+  final xkzt = text(
+    r,
+    'xkzt',
+    text(r, 'xkztmc', text(r, 'status', text(r, 'zt'))),
+  ).trim();
+  final sfqd = text(r, 'sfqd').trim();
+  final isUnselected = r['selected'] == false ||
+      r['enrolled'] == false ||
+      sfqd == '0' ||
+      text(r, 'sfxk') == '0' ||
+      xkzt.contains('待筛选') ||
+      xkzt.contains('未筛选') ||
+      xkzt.contains('未选中') ||
+      xkzt.contains('退选') ||
+      xkzt.contains('落选') ||
+      mid.contains('待筛选') ||
+      mid.contains('未筛选') ||
+      mid.contains('未选中') ||
+      mid.contains('退选') ||
+      mid.contains('落选') ||
+      courseName.contains('待筛选') ||
+      courseName.contains('未选中') ||
+      courseName.contains('退选');
   return TimetableEntry(
     id: '${m[1]}-$weekday-$start',
     courseName: courseName,
@@ -825,6 +891,7 @@ TimetableEntry? parseTimetable(
     semester: semester,
     subSemester: text(r, 'xxq'),
     credit: credit,
+    selected: !isUnselected,
     weeks: parity == '0'
         ? [1, 3, 5, 7, 9, 11, 13, 15]
         : parity == '1'
