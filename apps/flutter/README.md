@@ -31,7 +31,7 @@ Windows 发布时需要携带整个 `build/windows/x64/runner/Release` 目录，
 
 依赖兼容测试在 `test/dependency_compatibility_test.dart`，覆盖 Markdown 表格及链接导航、保存取消与 Android content URI；原生安全存储和 SQLite 测试见 `integration_test/native_storage_test.dart`。
 
-最近验证记录（2026-09-13）：`flutter pub get` 成功，`flutter test --no-pub` 全量 126 项通过，`flutter analyze --no-pub` 输出 `No issues found!`，三者退出码均为 0。覆盖 WebVPN 链接与 AES、设置页/下载页以及新增的 `AppServices` 下载目录切换、恢复默认、其他设置保留和原目录文件查找回归。
+最近验证记录（2026-09-13）：`flutter pub get` 成功，`flutter test --no-pub` 全量 126 项通过，`flutter analyze --no-pub` 输出 `No issues found!`，三者退出码均为 0。覆盖 WebVPN 链接与 AES、设置页/下载页以及新增的 `AppServices` 下载目录切换、恢复默认、其他设置保留和原目录文件查找回归。随后 `flutter_window.cpp` 的 MSVC C4819/C2220 编译问题已修复，Windows 构建由用户确认成功；本轮未重复构建。
 
 本次 `flutter test integration_test/native_storage_test.dart -d windows --no-pub` 在链接阶段因运行中的 Debug 客户端占用 EXE 而报 `LNK1168`，未完成原生集成测试。用户随后确认运行时问题已解决；真实校园接口、全量手工验收和原生集成测试结果需分别记录。
 
@@ -44,11 +44,19 @@ Windows 发布时需要携带整个 `build/windows/x64/runner/Release` 目录，
 
 ## 下载目录
 
-默认目录为 `getApplicationSupportDirectory()` 下的 `downloads`。下载页和设置页可更改目录或恢复默认；启动时读取 `settings/app.downloadDirectory`。`FileService.setDownloadDirectory` 负责创建自定义目录、更新当前根目录和保存配置，`AppServices.applyDownloadDirectory` 复用同一逻辑；null、空白或默认路径会移除自定义配置并恢复 `files.defaultRoot`。
+默认目录为 `getApplicationSupportDirectory()` 下的 `downloads`。下载页可更改目录或恢复默认，设置页不再提供下载目录配置；启动时读取 `settings/app.downloadDirectory`。`FileService.setDownloadDirectory` 负责创建自定义目录、更新当前根目录和保存配置，`AppServices.applyDownloadDirectory` 复用同一逻辑；null、空白或默认路径会移除自定义配置并恢复 `files.defaultRoot`。
 
 切换目录不会移动已有文件。下载记录中的 `relativePath` 与记录级 `downloadDir` 用于查找，`FileService.file()` 依次尝试记录目录、当前目录和默认目录。当前下载页 loader 的 `exists` 仅检查当前根目录，因此原目录中的文件仍可能被标为已移除；服务层查找回归通过不代表这一页面状态差异已修复。
 
 `services.dart` 中读取旧 `settings/app.downloadDir` 并回退系统下载目录的 `downloadDirectory()` 目前只由遗留测试引用，不参与实际启动和目录切换。
+
+## 桌面挂件
+
+Windows 挂件使用 `desktop_multi_window` 创建一个子窗口，展示层级复刻旧 Web 挂件，但日程仍通过主窗口转发的 `upcoming()` 获取，问答仍通过 `AgentService.chat(widget: true)` 获取；问答是一次性只读模式，不写入普通聊天历史，也不能调用下载工具。
+
+展开面板与 64×64 的“求是”小球是同一个 `WidgetApp` 的内部状态，不是两个窗口。展开时窗口为 380×560，收起时为 64×64；窗口使用透明背景、无标题栏/无边框、无阴影、置顶且不进入任务栏。点击日程或“打开应用”会唤起主窗口并跳转工作台 `/`。
+
+`DesktopHost.initialize` 启动时扫描并复用已有的 `widget:*` 子窗口，同时隐藏重复实例，避免热重载/热重启后出现多个挂件。`windows/runner/flutter_window.cpp` 只为 `desktop_multi_window` 的 secondary window 去除 Win32 系统边框，主窗口不受影响。
 
 ## 代码导航
 

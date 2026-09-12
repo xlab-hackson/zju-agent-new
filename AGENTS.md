@@ -104,6 +104,8 @@ zju-agent-new/
 
 - `CampusShell` 以宽度 >= 1024 作为桌面布局：左侧导航栏宽 240；窄屏使用 AppBar、右上角下载/设置入口和底部导航。
 - 桌面主窗口默认 1320×900，最小 800×600。
+- Windows 桌面挂件由 `desktop_multi_window` 创建一个子窗口承载；展开面板与 64×64 小球是同一个 `WidgetApp` 的内部状态，不能拆成两个原生窗口。`DesktopHost.initialize` 会复用已有的 `widget:*` 子窗口并隐藏重复实例，避免热重载/热重启后叠出多个挂件。
+- 挂件窗口使用透明背景、无标题栏/无边框、无阴影、置顶且不进入任务栏；`windows/runner/flutter_window.cpp` 只调整 secondary window 的 Win32 样式，主窗口保持普通边框。日程点按通过主窗口的 `open('/')` 回调跳转工作台。
 - 右侧辅助面板在宽屏显示；窄屏通过页面上的入口/FAB 调出底部面板。课程页保留这一行为；作业筛选已并入主内容，考试页不再保留冗余右栏。
 - 页面首次进入时由 `AppServices.claimInitialRefresh(pageKey)` 控制本次应用运行内的一次**强制刷新**，避免手机端每次下拉通知栏或生命周期变化都重新请求。之后由用户主动刷新，手动刷新同样强制绕过缓存；学校信息页不使用下拉刷新。除本地下载页和占位页外，数据页使用一天有效的本地缓存，并在标题区域显示“数据更新于 N 分钟前”。
 - 刷新/缓存约定：首次进入按稳定的 `pageKey` 只自动强制刷新一次；重复进入、路由重建和普通生命周期变化不自动请求。用户点击刷新或下拉刷新时必须强制请求最新数据。通知页使用两路独立的一天缓存，不提供下拉刷新但保留强制刷新按钮；下载页不参与网络数据缓存和更新时间提示。
@@ -204,7 +206,7 @@ zju-agent-new/
 
 ## 6. Flutter 文件下载与备份
 
-- `application/files.dart` 默认使用应用支持目录下的 `downloads`，支持在下载页和设置页选择自定义目录或恢复默认；文件按课程建立子目录，文件名清理非法字符，同名文件由系统式的 `file (1).ext` 处理。
+- `application/files.dart` 默认使用应用支持目录下的 `downloads`；下载页支持选择自定义目录或恢复默认，设置页不再提供下载目录配置，只保留备份导入/导出。文件按课程建立子目录，文件名清理非法字符，同名文件由系统式的 `file (1).ext` 处理。
 - 下载目录统一由 `FileService.setDownloadDirectory(String?)` 切换并持久化到 `settings/app.downloadDirectory`；`AppServices.applyDownloadDirectory` 委托该方法并返回 `files.root`。启动从同一字段恢复目录；null、空白或默认路径恢复 `files.defaultRoot` 并移除配置，保留其他应用设置。
 - `FileService` 没有 `moveRoot` 方法。`services.dart` 中读取 `settings/app.downloadDir`、回退系统下载目录的 `downloadDirectory()` 是遗留辅助函数，当前启动和切换链路均不使用；不要重新接入这套不一致的配置逻辑。
 - 切换目录不搬迁已有文件。下载记录用 `relativePath` 与记录级 `downloadDir` 定位文件，`FileService.file()` 依次查找记录目录、当前目录与默认目录。当前 `downloads_loader.dart` 的 `exists` 仍只检查当前根目录，可能把原目录中的文件标为已移除；这是尚未统一的页面状态边界，不能宣称旧文件在下载页的展示已完全修复。
@@ -249,7 +251,7 @@ zju-agent-new/
 - `ui/avatar.dart` 提供默认圆形头像、文件选择和 data URL 压缩；设置页应直接显示圆形头像，首页顶部问候区和聊天头像复用同一设置。
 - 个性化设置和其他应用设置一起整体保存；保存前必须展开已有设置，不能只 PUT 修改字段而清空下载目录等其他配置。
 - `platform/desktop.dart` 是当前 Flutter Windows 桌面宿主，使用 `desktop_multi_window`、`window_manager` 和 `tray_manager`；它不是旧 Electron 实现。
-- Flutter 挂件是透明无边框、置顶的小窗，显示未来 48 小时日程/待办并提供只读一次性问答。旧 Electron 挂件的材质结论只适用于 `apps/desktop`，不要据此给 Flutter 窗口引入 Electron API。
+- Flutter 挂件复刻旧 Web 挂件的展示层级，仍复用当前 `upcoming()` 日程数据和 `AgentService.chat(widget: true)` 只读问答链路；显示未来 48 小时日程/待办，日程点按打开主窗口工作台。展开面板与“求是”小球属于同一个透明无边框、无阴影、置顶子窗口，分别通过 380×560 与 64×64 的窗口尺寸切换；`DesktopHost` 负责复用已有挂件并隐藏重复实例。旧 Electron 挂件的材质结论只适用于 `apps/desktop`，不要据此给 Flutter 窗口引入 Electron API。
 
 ## 9. 旧 Web/Electron/Node 架构（仅供维护旧实现或对照）
 
@@ -281,7 +283,7 @@ zju-agent-new/
 
 当前测试覆盖依赖兼容性、领域模型/课表、LLM URL 和请求、登录 cookie、认证协议、错误展示、SQLite/存储、作业筛选过滤、课程详情 Tab 及作业展示、课程表表头自适应/解耦/导出、课程表桌面端Tab半行自适应排版与窄屏滑动、课程表去网格框线、移动端课表尺寸精简与三行最多八字截断、秋/冬小学期分段过滤切换、右侧总览栏两行以内Tab自适应切换、秋/冬学期精准识别、课程表/日程点按弹出详情抽屉、课程详情上课时间/教室/教师元数据行、课程总览教师标注、移动端日程紧凑排版、设置页折叠展开、页面感知上下文与 API 指引、学业快览卡片直达与辅助栏学业统计、缓存请求合并、跨页面缓存通知和更新时间回归等；原生测试覆盖 Windows 安全存储和 SQLite，另有真实登录手工测试。
 
-最近验证记录（2026-09-13）：依赖恢复和下载目录调用修复后，`flutter pub get` 成功，`flutter test --no-pub` 全量 126 项通过，`flutter analyze --no-pub` 输出 `No issues found!`，三者退出码均为 0。包含 `test/webvpn_test.dart` 的链接/AES 回归和 `test/storage_test.dart` 新增的目录切换、恢复默认、配置保留与原目录文件查找回归。
+最近验证记录（2026-09-13）：依赖恢复和下载目录调用修复后，`flutter pub get` 成功，`flutter test --no-pub` 全量 126 项通过，`flutter analyze --no-pub` 输出 `No issues found!`，三者退出码均为 0。包含 `test/webvpn_test.dart` 的链接/AES 回归和 `test/storage_test.dart` 新增的目录切换、恢复默认、配置保留与原目录文件查找回归。随后 `flutter_window.cpp` 的 MSVC C4819/C2220 原生编译问题已通过保持源文件 ASCII 可表示修复，Windows 构建由用户确认成功；本轮没有重复构建。
 
 `flutter test integration_test/native_storage_test.dart -d windows --no-pub` 在链接阶段因正在运行的 Debug 客户端占用 EXE 而报 `LNK1168`，本次原生集成测试未完成。用户随后确认运行时问题已解决；这不等于原生集成测试或真实校园接口全量验收通过。
 

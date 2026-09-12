@@ -24,7 +24,12 @@ Future<void> main(List<String> args) async {
   }
   try {
     final services = await AppServices.create();
-    if (Platform.isWindows) await DesktopHost.initialize(services);
+    if (Platform.isWindows) {
+      await DesktopHost.initialize(
+        services,
+        onOpenPath: (path) => appRouter.go(path),
+      );
+    }
     runApp(
       ProviderScope(
         overrides: [servicesProvider.overrideWithValue(services)],

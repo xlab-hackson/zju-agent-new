@@ -5,6 +5,33 @@
 #include "flutter/generated_plugin_registrant.h"
 #include "desktop_multi_window/desktop_multi_window_plugin.h"
 
+namespace {
+
+void MakeSubWindowBorderless(flutter::FlutterViewController* controller) {
+  if (controller == nullptr || controller->view() == nullptr) {
+    return;
+  }
+
+  // desktop_multi_window creates child windows with WS_OVERLAPPEDWINDOW.
+  // Only the child host is changed; the main window keeps its normal frame.
+  HWND flutter_view = controller->view()->GetNativeWindow();
+  HWND window = GetAncestor(flutter_view, GA_ROOT);
+  if (window == nullptr) {
+    return;
+  }
+
+  LONG_PTR style = GetWindowLongPtr(window, GWL_STYLE);
+  style &= ~(WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX |
+             WS_SYSMENU);
+  style |= WS_POPUP;
+  SetWindowLongPtr(window, GWL_STYLE, style);
+  SetWindowPos(window, nullptr, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
+                   SWP_FRAMECHANGED);
+}
+
+}  // namespace
+
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
 
@@ -29,6 +56,7 @@ bool FlutterWindow::OnCreate() {
   DesktopMultiWindowSetWindowCreatedCallback([](void* controller) {
     auto* view = reinterpret_cast<flutter::FlutterViewController*>(controller);
     RegisterPlugins(view->engine());
+    MakeSubWindowBorderless(view);
   });
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
