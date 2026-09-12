@@ -397,6 +397,23 @@ class _DashboardPageState extends CampusPageState<DashboardPage>
     },
   );
 
+  /// 需要校园网才能直接访问的站点：不在校园网时改用 WebVPN 打开。
+  static const _campusOnlyHosts = {'www.cc98.org'};
+
+  /// 打开百宝箱条目。只有已知需要校园网的站点才做校园网判断与 WebVPN 提示。
+  Future<void> openTool(String label, String url) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null || !_campusOnlyHosts.contains(uri.host)) {
+      return openExternal(url);
+    }
+    return openCampusLink(
+      context,
+      uri,
+      label: label,
+      onCampusNetwork: () => s.campus.onCampusNetwork(),
+    );
+  }
+
   Widget _toolGrid() {
     const tools = [
       ('智云课堂', 'video-lesson-play', 'https://classroom.zju.edu.cn'),
@@ -429,7 +446,7 @@ class _DashboardPageState extends CampusPageState<DashboardPage>
                   url: tool.$3,
                   onOpen: tool.$3 == null
                       ? null
-                      : () => act(() => openExternal(tool.$3!)),
+                      : () => act(() => openTool(tool.$1, tool.$3!)),
                 ),
               ),
           ],
