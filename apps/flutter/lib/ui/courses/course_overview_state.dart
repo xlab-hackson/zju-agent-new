@@ -217,10 +217,12 @@ mixin CourseOverviewState<T extends CampusDataPage> on CampusPageState<T> {
             color: blue,
             backgroundColor: paperCard,
             onRefresh: refreshOverview,
-            child: SingleChildScrollView(
-              physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
-              child: FutureBuilder<Json>(
+            child: ScrollConfiguration(
+              behavior: const NoScrollbarScrollBehavior(),
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
+                child: FutureBuilder<Json>(
                 future: overviewData ??= loadOverview(
                   refresh: s.claimInitialRefresh('/courses:panel'),
                 ),
@@ -296,6 +298,7 @@ mixin CourseOverviewState<T extends CampusDataPage> on CampusPageState<T> {
           ),
         ),
       ),
-    );
+    ),
+  );
   }
 }

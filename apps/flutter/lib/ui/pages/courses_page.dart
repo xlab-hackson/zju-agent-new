@@ -97,9 +97,12 @@ class _CoursesPageState extends CampusPageState<CoursesPage>
         color: blue,
         backgroundColor: paperCard,
         onRefresh: refreshOverview,
-        child: SingleChildScrollView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          child: overviewPanelContent(),
+        child: ScrollConfiguration(
+          behavior: const NoScrollbarScrollBehavior(),
+          child: SingleChildScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            child: overviewPanelContent(),
+          ),
         ),
       ),
     ),
@@ -117,10 +120,13 @@ class _CoursesPageState extends CampusPageState<CoursesPage>
           color: blue,
           backgroundColor: paperCard,
           onRefresh: refreshOverview,
-          child: SingleChildScrollView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
-            child: overviewPanelContent(),
+          child: ScrollConfiguration(
+            behavior: const NoScrollbarScrollBehavior(),
+            child: SingleChildScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
+              child: overviewPanelContent(),
+            ),
           ),
         ),
       ),

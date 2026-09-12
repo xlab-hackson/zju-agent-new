@@ -2440,5 +2440,43 @@ void main() {
     expect(ttList.any((e) => e['courseName'] == '高等数学进阶'), isTrue, reason: '已选中未建课的课程必须正常展示在课表上');
     expect(ttList.any((e) => e['courseName'] == '轮滑（初级）'), isFalse, reason: '待筛选课程不得出现在课程表上');
   });
+
+  testWidgets(
+    'CoursesPage desktop side panel uses NoScrollbarScrollBehavior',
+    (tester) async {
+      tester.view.physicalSize = const Size(1200, 900);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() => tester.view.resetPhysicalSize());
+
+      final db = AgentDatabase.memory();
+      addTearDown(() => db.close());
+      final secrets = _FakeSecrets();
+      final campus = CampusService(CampusSession(secrets), db);
+      final tempDir = Directory.systemTemp.createTempSync('course_noscroll_test_');
+      addTearDown(() => tempDir.deleteSync(recursive: true));
+      final files = FileService(campus, tempDir);
+      final backups = BackupService(db, files);
+      final agent = AgentService(campus, files, GuideIndex(const {}));
+      final services = AppServices(db, secrets, campus, files, backups, agent);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: FeaturePage(services: services, page: '/courses'),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final scrollConfigs = tester.widgetList<ScrollConfiguration>(
+        find.byType(ScrollConfiguration),
+      );
+      expect(
+        scrollConfigs.any((sc) => sc.behavior is NoScrollbarScrollBehavior),
+        isTrue,
+        reason: 'CoursesPage side panel should configure NoScrollbarScrollBehavior to suppress desktop scrollbars',
+      );
+    },
+  );
 }
 
