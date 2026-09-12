@@ -81,13 +81,17 @@ class _CoursesPageState extends CampusPageState<CoursesPage>
                 left: BorderSide(color: ink.withValues(alpha: .15)),
               ),
             ),
-            padding: const EdgeInsets.fromLTRB(20, 28, 20, 100),
+            // 右侧只留 6，余下的 14 交给滚动视图内部留白：桌面端 Flutter 会给
+            // 滚动视图叠加 Scrollbar，而它固定画在滚动视图右缘，只有让内容
+            // 内缩才能避免标题行的刷新/收起按钮被压在滚动条下面。
+            padding: const EdgeInsets.fromLTRB(20, 28, 6, 100),
             child: RefreshIndicator(
               color: blue,
               backgroundColor: paperCard,
               onRefresh: refreshOverview,
               child: SingleChildScrollView(
                 physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.only(right: 14),
                 child: overviewPanelContent(
                   onCollapse: () => setState(() => overviewCollapsed = true),
                 ),
