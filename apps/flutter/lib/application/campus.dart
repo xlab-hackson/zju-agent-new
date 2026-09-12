@@ -35,6 +35,45 @@ class CampusService {
     if (!_cacheChanges.isClosed) _cacheChanges.add(key);
   }
 
+  /// 浙江大学镜像站的官方校园网判定接口：
+  /// `0` 不在校园网，`1` 校园网 IPv4，`2` 校园网 IPv6。
+  static const campusNetworkApi =
+      'https://mirrors.zju.edu.cn/api/is_campus_network';
+
+  /// 校园网判定的有效期。故意远短于数据缓存的一天：接入或断开 aTrust、
+  /// 切换网络后环境会立刻变化，久留错误结论会让用户一直走错路径。
+  static const campusNetworkValidity = Duration(minutes: 5);
+
+  DateTime? _campusNetworkCheckedAt;
+  bool _campusNetworkOnCampus = false;
+
+  /// 当前是否处于校园网环境（含经 aTrust / RVPN 等隧道的访问）。
+  ///
+  /// 该接口会把隧道访问同样判定为校内，因此不需要自己判断网段，也不需要
+  /// 逐个探测站点。判定失败按「不在校园网」处理，调用方仍应给用户直接
+  /// 访问的选项，不能把用户困住。
+  Future<bool> onCampusNetwork({bool refresh = false}) async {
+    final now = DateTime.now();
+    final checkedAt = _campusNetworkCheckedAt;
+    if (!refresh &&
+        checkedAt != null &&
+        now.difference(checkedAt) < campusNetworkValidity) {
+      return _campusNetworkOnCampus;
+    }
+    try {
+      final response = await publicClient.get<String>(
+        campusNetworkApi,
+        options: Options(responseType: ResponseType.plain),
+      );
+      final value = response.data?.trim() ?? '';
+      _campusNetworkOnCampus = value == '1' || value == '2';
+    } catch (_) {
+      _campusNetworkOnCampus = false;
+    }
+    _campusNetworkCheckedAt = now;
+    return _campusNetworkOnCampus;
+  }
+
   DateTime? _cacheTime(Json? value) {
     if (value == null) return null;
     return DateTime.tryParse(text(value, 'updatedAt'))?.toUtc();
