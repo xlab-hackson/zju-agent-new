@@ -125,7 +125,7 @@ mixin CourseOverviewState<T extends CampusDataPage> on CampusPageState<T> {
 
   Future<Json> loadOverview({bool refresh = false}) =>
       _loadOverviewData(refresh: refresh);
-  Widget overviewPanelContent() =>
+  Widget overviewPanelContent({VoidCallback? onCollapse}) =>
       FutureBuilder<Json>(
         future: overviewData ??= loadOverview(
           refresh: s.claimInitialRefresh('/courses:panel'),
@@ -178,6 +178,7 @@ mixin CourseOverviewState<T extends CampusDataPage> on CampusPageState<T> {
             },
             onRefresh: refreshOverview,
             onSelect: courseDetail,
+            onCollapse: onCollapse,
           );
         },
       );

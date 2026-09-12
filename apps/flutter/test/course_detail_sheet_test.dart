@@ -1777,4 +1777,71 @@ void main() {
       expect(policy['teacher'], '王老师');
     },
   );
+
+  testWidgets('课程页学期总览可收起，并在窄栏上重新展开', (tester) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(() => tester.view.resetPhysicalSize());
+
+    final db = AgentDatabase.memory();
+    addTearDown(() => db.close());
+    final secrets = _FakeSecrets();
+    final campus = CampusService(CampusSession(secrets), db);
+    final tempDir = Directory.systemTemp.createTempSync('overview_collapse_');
+    addTearDown(() => tempDir.deleteSync(recursive: true));
+    final files = FileService(campus, tempDir);
+    final backups = BackupService(db, files);
+    final agent = AgentService(campus, files, GuideIndex(const {}));
+    final services = AppServices(db, secrets, campus, files, backups, agent);
+    services.claimInitialRefresh('/courses');
+    services.claimInitialRefresh('/courses:panel');
+
+    final currentSem = academicSemester(beijing(DateTime.now()));
+    final now = DateTime.now().toUtc().toIso8601String();
+    await db.put('cache', 'semesters', {
+      'items': [
+        {'id': currentSem, 'name': '$currentSem学期'},
+      ],
+      'updatedAt': now,
+    });
+    await db.put('cache', 'courses', {
+      'items': [
+        {'id': 'c1', 'name': '高等数学', 'semesterId': currentSem},
+      ],
+      'updatedAt': now,
+    });
+    await db.put('cache', 'grades:', {'items': [], 'updatedAt': now});
+    await db.put('cache', 'timetable:$currentSem', {
+      'items': [],
+      'updatedAt': now,
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: FeaturePage(services: services, page: '/courses'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // 展开状态：显示辅助栏标题与收起按钮。
+    expect(find.text('学期总览'), findsOneWidget);
+    expect(find.byTooltip('收起学期总览'), findsOneWidget);
+    expect(find.byTooltip('展开学期总览'), findsNothing);
+
+    await tester.tap(find.byTooltip('收起学期总览'));
+    await tester.pumpAndSettle();
+
+    // 收起状态：辅助栏内容消失，只留下可重新展开的窄栏。
+    expect(find.text('学期总览'), findsNothing);
+    expect(find.byTooltip('收起学期总览'), findsNothing);
+    expect(find.byTooltip('展开学期总览'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('展开学期总览'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('学期总览'), findsOneWidget);
+    expect(find.byTooltip('收起学期总览'), findsOneWidget);
+  });
 }
