@@ -417,6 +417,7 @@ void main() {
       expect(find.text('线性代数'), findsWidgets);
 
       // 2. Tap '全部学期' in right panel
+      await tester.ensureVisible(find.text('全部学期'));
       await tester.tap(find.text('全部学期'));
       await tester.pumpAndSettle();
 
@@ -438,6 +439,7 @@ void main() {
       expect(find.text('高等数学'), findsWidgets);
 
       // 4. Switch semester from Right Panel tab: tap 2023-2024秋冬 in right panel
+      await tester.ensureVisible(find.text('2023-2024秋冬').last);
       await tester.tap(find.text('2023-2024秋冬').last);
       await tester.pumpAndSettle();
 
@@ -757,7 +759,7 @@ void main() {
   );
 
   testWidgets(
-    'TimetableView header restricts semester tabs to roughly one half of header width on desktop and adapts tab sizes',
+    'TimetableView header renders horizontal scrollable semester tabs with Expanded and action buttons',
     (tester) async {
       const totalWidth = 900.0;
       tester.view.physicalSize = const Size(totalWidth, 600);
@@ -784,15 +786,15 @@ void main() {
         ),
       );
 
-      // Container padding is 14 on each side, so width is 900 - 28 = 872
-      // Half width is 872 / 2 = 436.0
-      final sizedBoxFinder = find.byWidgetPredicate(
-        (w) =>
-            w is SizedBox && w.width != null && (w.width! - 436.0).abs() < 1.0,
-      );
-      expect(sizedBoxFinder, findsOneWidget);
+      // Verify horizontal scroll view is rendered
+      expect(find.byType(SingleChildScrollView), findsWidgets);
 
-      // Verify all 5 choices are rendered and visible without scrolling on desktop
+      // Action buttons are rendered on the right
+      expect(find.text('导出图片'), findsOneWidget);
+      expect(find.text('导出 Excel'), findsOneWidget);
+      expect(find.byTooltip('刷新课表'), findsOneWidget);
+
+      // Verify choices are rendered
       for (final choice in choices) {
         expect(find.text(choice.name), findsOneWidget);
       }
@@ -803,10 +805,16 @@ void main() {
     'TimetableView header does not overflow across narrow and wide screen widths',
     (tester) async {
       final testChoices = [
-        const SemesterChoice('sem1', '2024-2025秋冬'),
+        const SemesterChoice('sem1', '2025-2026秋冬'),
         const SemesterChoice('sem2', '2024-2025春夏'),
-        const SemesterChoice('sem3', '2025-2026秋冬'),
-        const SemesterChoice('sem4', '2025-2026春夏'),
+        const SemesterChoice('sem3', '2024-2025秋冬'),
+        const SemesterChoice('sem4', '2023-2024春夏'),
+        const SemesterChoice('sem5', '2023-2024秋冬'),
+        const SemesterChoice('sem6', '2022-2023春夏'),
+        const SemesterChoice('sem7', '2022-2023秋冬'),
+        const SemesterChoice('sem8', '2021-2022春夏'),
+        const SemesterChoice('sem9', '2021-2022秋冬'),
+        const SemesterChoice('sem10', '2020-2021春夏'),
       ];
 
       FlutterErrorDetails? lastError;
@@ -821,7 +829,7 @@ void main() {
         tester.view.physicalSize = Size(width, 600);
         tester.view.devicePixelRatio = 1.0;
 
-        for (final count in [2, 3, 4]) {
+        for (final count in [2, 3, 4, 10]) {
           final choices = testChoices.sublist(0, count);
           lastError = null;
           await tester.pumpWidget(
@@ -1076,7 +1084,7 @@ void main() {
   );
 
   testWidgets(
-    'CourseRightPanel renders tabs and stays within 2 rows when multiple semesters exist',
+    'CourseRightPanel renders horizontal scrollable semester tabs and switches correctly',
     (tester) async {
       final semesters = [
         {'id': '2024-2025-1', 'name': '2024-2025学年秋冬学期'},
@@ -1115,7 +1123,7 @@ void main() {
         ),
       );
 
-      // With 4 semesters + 'all', total 5 choices: splits into 2 rows (row1: 3, row2: 2)
+      // With 4 semesters + 'all', total 5 choices rendered in horizontal scroll bar
       expect(find.text('全部学期'), findsOneWidget);
       expect(find.text('2024-2025秋冬'), findsOneWidget);
       expect(find.text('2024-2025春夏'), findsOneWidget);
@@ -1123,6 +1131,7 @@ void main() {
       expect(find.text('2025-2026春夏'), findsOneWidget);
 
       // Tap '2024-2025秋冬' tab
+      await tester.ensureVisible(find.text('2024-2025秋冬'));
       await tester.tap(find.text('2024-2025秋冬'));
       await tester.pumpAndSettle();
 
@@ -1130,6 +1139,7 @@ void main() {
       expect(find.text('数据库系统'), findsNothing);
 
       // Tap '全部学期'
+      await tester.ensureVisible(find.text('全部学期'));
       await tester.tap(find.text('全部学期'));
       await tester.pumpAndSettle();
 
@@ -1561,6 +1571,8 @@ void main() {
         ),
       );
 
+      await tester.pumpAndSettle();
+
       // In 'all' mode:
       expect(find.text('目前总绩点'), findsOneWidget);
       expect(find.text('获得总学分'), findsOneWidget);
@@ -1570,6 +1582,7 @@ void main() {
       expect(find.textContaining('全历程共 2 门课程 · 已出分 1 门'), findsOneWidget);
 
       // Switch to 2024-2025秋冬 (ongoing semester, c2 has 4 credits but not graded yet)
+      await tester.ensureVisible(find.text('2024-2025秋冬'));
       await tester.tap(find.text('2024-2025秋冬'));
       await tester.pumpAndSettle();
 
@@ -1580,6 +1593,7 @@ void main() {
       expect(find.textContaining('本学期共 1 门课程 · 暂未出分'), findsOneWidget);
 
       // Switch to 2023-2024秋冬 (graded semester)
+      await tester.ensureVisible(find.text('2023-2024秋冬'));
       await tester.tap(find.text('2023-2024秋冬'));
       await tester.pumpAndSettle();
 

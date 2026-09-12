@@ -1,6 +1,4 @@
-import 'dart:math' as math;
-import 'dart:ui' show PointerDeviceKind;
-
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 import '../../domain/course_catalog.dart';
@@ -44,6 +42,13 @@ class TimetableView extends StatefulWidget {
 
 class _TimetableViewState extends State<TimetableView> {
   String _selectedSubSemester = '';
+  final ScrollController _tabsScrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _tabsScrollController.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -217,80 +222,6 @@ class _TimetableViewState extends State<TimetableView> {
   Widget _header(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
       final compactActions = constraints.maxWidth < 700;
-      final tabAreaWidth = compactActions
-          ? math.max(120.0, constraints.maxWidth - 120)
-          : math.min(constraints.maxWidth * 0.5, constraints.maxWidth - 340.0);
-
-      final count = widget.choices.length;
-      final spacing = count > 4 ? 4.0 : 6.0;
-
-      double estimatedNaturalWidth = 0.0;
-      for (final c in widget.choices) {
-        double tabW = 32.0;
-        for (final char in c.name.runes) {
-          tabW += (char >= 0x2e80 && char <= 0x9fff) ? 16.0 : 12.0;
-        }
-        estimatedNaturalWidth += math.max(160.0, tabW);
-      }
-      estimatedNaturalWidth += math.max(0, count - 1) * spacing;
-
-      final needAdaptive =
-          !compactActions && (estimatedNaturalWidth > tabAreaWidth);
-
-      Widget tabsWidget;
-      if (compactActions) {
-        tabsWidget = ScrollConfiguration(
-          behavior: ScrollConfiguration.of(context).copyWith(
-            scrollbars: false,
-            dragDevices: {
-              PointerDeviceKind.touch,
-              PointerDeviceKind.mouse,
-              PointerDeviceKind.trackpad,
-            },
-          ),
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            physics: const BouncingScrollPhysics(),
-            child: Row(
-              children: [
-                for (final choice in widget.choices) ...[
-                  _semesterTab(choice, compact: true),
-                  const SizedBox(width: 6),
-                ],
-              ],
-            ),
-          ),
-        );
-      } else if (needAdaptive) {
-        final widthPerTab =
-            (tabAreaWidth - math.max(0, count - 1) * spacing) / count;
-        tabsWidget = SizedBox(
-          width: tabAreaWidth,
-          child: Row(
-            children: [
-              for (var i = 0; i < count; i++) ...[
-                if (i > 0) SizedBox(width: spacing),
-                Expanded(
-                  child: _adaptiveSemesterTab(
-                    widget.choices[i],
-                    availableWidth: widthPerTab,
-                  ),
-                ),
-              ],
-            ],
-          ),
-        );
-      } else {
-        tabsWidget = Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (var i = 0; i < count; i++) ...[
-              if (i > 0) const SizedBox(width: 6),
-              _semesterTab(widget.choices[i], compact: false),
-            ],
-          ],
-        );
-      }
 
       final actions = Row(
         mainAxisSize: MainAxisSize.min,
@@ -362,68 +293,59 @@ class _TimetableViewState extends State<TimetableView> {
         ],
       );
 
+      final tabsWidget = Listener(
+        onPointerSignal: (pointerSignal) {
+          if (pointerSignal is PointerScrollEvent &&
+              _tabsScrollController.hasClients) {
+            final delta = pointerSignal.scrollDelta.dy != 0
+                ? pointerSignal.scrollDelta.dy
+                : pointerSignal.scrollDelta.dx;
+            if (delta != 0) {
+              final target = (_tabsScrollController.offset + delta).clamp(
+                0.0,
+                _tabsScrollController.position.maxScrollExtent,
+              );
+              _tabsScrollController.jumpTo(target);
+            }
+          }
+        },
+        child: ScrollConfiguration(
+          behavior: ScrollConfiguration.of(context).copyWith(
+            scrollbars: false,
+            dragDevices: {
+              PointerDeviceKind.touch,
+              PointerDeviceKind.mouse,
+              PointerDeviceKind.trackpad,
+            },
+          ),
+          child: SingleChildScrollView(
+            controller: _tabsScrollController,
+            scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (var i = 0; i < widget.choices.length; i++) ...[
+                  if (i > 0) const SizedBox(width: 6),
+                  _semesterTab(widget.choices[i], compact: compactActions),
+                ],
+              ],
+            ),
+          ),
+        ),
+      );
+
       return Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          if (compactActions)
-            Expanded(child: tabsWidget)
-          else ...[
-            tabsWidget,
-            const Spacer(),
-          ],
+          Expanded(child: tabsWidget),
+          const SizedBox(width: 8),
           actions,
         ],
       );
     },
   );
 
-  Widget _adaptiveSemesterTab(
-    SemesterChoice choice, {
-    required double availableWidth,
-  }) {
-    final isSelected = choice.id == widget.semester;
-    final horizontalPad = availableWidth < 70
-        ? 2.0
-        : (availableWidth < 90 ? 4.0 : 6.0);
-    final fontSize = availableWidth < 70
-        ? 10.5
-        : (availableWidth < 90 ? 11.0 : 12.0);
-
-    return InkWell(
-      onTap: () {
-        if (choice.id != widget.semester) {
-          widget.onSemesterChanged?.call(choice.id);
-        }
-      },
-      borderRadius: BorderRadius.circular(6),
-      child: Container(
-        height: 32,
-        padding: EdgeInsets.symmetric(horizontal: horizontalPad, vertical: 5),
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: isSelected ? blue.withValues(alpha: .14) : Colors.transparent,
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(
-            color: isSelected ? blue : ink.withValues(alpha: .18),
-            width: isSelected ? 1.5 : 1,
-          ),
-        ),
-        child: FittedBox(
-          fit: BoxFit.scaleDown,
-          child: Text(
-            choice.name,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: fontSize,
-              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-              color: isSelected ? blue : ink,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 
   Widget _semesterTab(SemesterChoice choice, {bool compact = false}) {
     final isSelected = choice.id == widget.semester;
