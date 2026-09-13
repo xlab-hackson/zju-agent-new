@@ -78,7 +78,7 @@ class CampusApp extends StatelessWidget {
   const CampusApp({super.key});
   @override
   Widget build(BuildContext context) => MaterialApp.router(
-    title: '求是书院',
+    title: '求是助手',
     debugShowCheckedModeBanner: false,
     theme: paperTheme(),
     routerConfig: appRouter,
@@ -180,7 +180,7 @@ class CampusShell extends ConsumerWidget {
           appBar: desktop
               ? null
               : AppBar(
-                  title: const Text('求是书院'),
+                  title: const Text('求是助手'),
                   actions: [
                     IconButton(
                       tooltip: '下载',
@@ -272,7 +272,7 @@ class _DesktopSidebar extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '求是书院',
+                  '求是助手',
                   style: TextStyle(
                     color: paper,
                     fontSize: 18,

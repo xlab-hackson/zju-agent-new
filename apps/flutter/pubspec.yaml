@@ -1,5 +1,5 @@
 name: zju_campus_agent
-description: 求是书院 · 本地优先校园助手
+description: 求是助手 · 本地优先校园助手
 publish_to: none
 version: 0.2.0+1
 environment:

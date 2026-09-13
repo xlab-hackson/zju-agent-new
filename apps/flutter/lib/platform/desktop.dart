@@ -29,7 +29,7 @@ class DesktopHost with TrayListener, WindowListener {
       const WindowOptions(
         size: Size(1320, 900),
         minimumSize: Size(800, 600),
-        title: '求是书院',
+        title: '求是助手',
       ),
       () async {
         await windowManager.show();
@@ -95,7 +95,7 @@ class DesktopHost with TrayListener, WindowListener {
     // nid.szTip（垃圾内存）备份后原样写回，并因此设置 NIF_TIP，导致鼠标悬停
     // 托盘图标时显示乱码。这里显式设置 tooltip 覆盖掉那个值。
     // 必须在 setIcon 之后调用：SetToolTip 走 NIM_MODIFY，要求图标已经存在。
-    await trayManager.setToolTip('求是书院');
+    await trayManager.setToolTip('求是助手');
     await trayManager.setContextMenu(
       Menu(
         items: [
