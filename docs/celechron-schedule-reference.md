@@ -73,15 +73,15 @@
 
 ## 四、 核心接口与模块分布
 
-1. **协议与领域算法层**：[`packages/core/src/domain/schedule.ts`](file:///home/yt/zjuagent/zju-agent/packages/core/src/domain/schedule.ts)
+1. **协议与领域算法层**：[`archive/packages/core/src/domain/schedule.ts`](file:///home/yt/zjuagent/zju-agent/archive/packages/core/src/domain/schedule.ts)
    - 定义 `SemesterCalendarConfig`、`AcademicDateInfo`、`ScheduleEvent`、`UpcomingPeriod`、`UpcomingAssignment`、`UpcomingSchedule48h`；
    - 算法函数 `calculateAcademicDateInfo`、`projectTimetableToDay`、`buildDailySchedule`、`buildUpcomingSchedule48h`。
-2. **服务层**：[`packages/zju-services/src/calendar/index.ts`](file:///home/yt/zjuagent/zju-agent/packages/zju-services/src/calendar/index.ts)
+2. **服务层**：[`archive/packages/zju-services/src/calendar/index.ts`](file:///home/yt/zjuagent/zju-agent/archive/packages/zju-services/src/calendar/index.ts)
    - `CalendarService`：负责校历加载、远程同步、缓存保鲜及日程事件聚合推算；新增 `getUpcomingSchedule48h(...)` 方法。
 3. **工具与路由层**：
-   - 路由 [`packages/server/src/routes/zdbk.ts`](file:///home/yt/zjuagent/zju-agent/packages/server/src/routes/zdbk.ts)：新增 `GET /api/zju/schedule/upcoming-48h`；
-   - 工具 [`packages/server/src/agent/tools.ts`](file:///home/yt/zjuagent/zju-agent/packages/server/src/agent/tools.ts)：新增 `zju_get_upcoming_schedule` 工具；
-   - 提示词 [`packages/server/src/agent/loop.ts`](file:///home/yt/zjuagent/zju-agent/packages/server/src/agent/loop.ts)：提示词指引大模型优先选用接下来 48 小时日程流。
+   - 路由 [`archive/packages/server/src/routes/zdbk.ts`](file:///home/yt/zjuagent/zju-agent/archive/packages/server/src/routes/zdbk.ts)：新增 `GET /api/zju/schedule/upcoming-48h`；
+   - 工具 [`archive/packages/server/src/agent/tools.ts`](file:///home/yt/zjuagent/zju-agent/archive/packages/server/src/agent/tools.ts)：新增 `zju_get_upcoming_schedule` 工具；
+   - 提示词 [`archive/packages/server/src/agent/loop.ts`](file:///home/yt/zjuagent/zju-agent/archive/packages/server/src/agent/loop.ts)：提示词指引大模型优先选用接下来 48 小时日程流。
 4. **Web 前端交互层**：
-   - Hook [`apps/web/src/api/zju.ts`](file:///home/yt/zjuagent/zju-agent/apps/web/src/api/zju.ts)：新增 `useUpcomingSchedule48h`；
-   - 页面 [`apps/web/src/pages/Dashboard.tsx`](file:///home/yt/zjuagent/zju-agent/apps/web/src/pages/Dashboard.tsx)：改版为 Celechron 接下来 48 小时日程流、Hero 首项卡片、秒级倒计时、默认折叠的 48 小时截止作业栏目。
+   - Hook [`archive/apps/web/src/api/zju.ts`](file:///home/yt/zjuagent/zju-agent/archive/apps/web/src/api/zju.ts)：新增 `useUpcomingSchedule48h`；
+   - 页面 [`archive/apps/web/src/pages/Dashboard.tsx`](file:///home/yt/zjuagent/zju-agent/archive/apps/web/src/pages/Dashboard.tsx)：改版为 Celechron 接下来 48 小时日程流、Hero 首项卡片、秒级倒计时、默认折叠的 48 小时截止作业栏目。

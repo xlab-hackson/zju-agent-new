@@ -2,7 +2,7 @@
 
 > 本文档按 2026-09-13 的实际代码状态更新。
 > 它同时记录当前 Flutter 客户端的产品/技术规格，以及仓库中仍保留的旧 Web/Electron/Node 实现的维护边界。
-> 后续涉及页面、交互、本地存储或桌面能力时，默认以 `apps/flutter` 为准；除非用户明确要求，不要为了 Flutter 需求修改 `apps/web`。
+> 后续涉及页面、交互、本地存储或桌面能力时，默认以仓库根目录的 Flutter 工程为准；除非用户明确要求，不要为了 Flutter 需求修改 `archive/apps/web`。
 
 ## 1. 文档范围与当前结论
 
@@ -14,9 +14,9 @@
 
 | 实现 | 目录 | 状态 | 适用场景 |
 | --- | --- | --- | --- |
-| Flutter 客户端 | `apps/flutter` | 当前主实现，Windows 正在功能和界面验收 | 新功能、页面调整、认证、下载、AI、桌面挂件 |
-| React Web | `apps/web` | 旧实现，保留作为历史 Web 版本和视觉/交互参考 | 明确要求维护 Web 版本时 |
-| Electron + Node | `apps/desktop`、`packages/*` | 旧桌面运行链路 | 维护旧启动器、旧服务或对照行为时 |
+| Flutter 客户端 | 仓库根目录 | 当前主实现，Windows 正在功能和界面验收 | 新功能、页面调整、认证、下载、AI、桌面挂件 |
+| React Web | `archive/apps/web` | 旧实现，保留作为历史 Web 版本和视觉/交互参考 | 明确要求维护 Web 版本时 |
+| Electron + Node | `archive/apps/desktop`、`archive/packages/*` | 旧桌面运行链路 | 维护旧启动器、旧服务或对照行为时 |
 
 ### 1.1 当前已完成的主要路径
 
@@ -71,8 +71,8 @@ Flutter 客户端当前包含：
 约束：
 
 - 不要把上游 `login-ZJU/` 源码目录复制进本仓库。
-- 不要在 `apps/web` 或 Flutter 中 import Node 包。
-- 旧 Node 服务使用 `packages/zju-services` 封装该 npm 包。
+- 不要在 `archive/apps/web` 或 Flutter 中 import Node 包。
+- 旧 Node 服务使用 `archive/packages/zju-services` 封装该 npm 包。
 - Flutter 的 `data/campus_session.dart` 依照公开协议和已有实现重新完成客户端所需的认证流程，不复制上游源码。
 - 登录跳转、RSA、服务票据、cookie 保存顺序和会话失效判断属于敏感逻辑，修改后必须增加协议测试或真实手工验收。
 
@@ -86,14 +86,14 @@ Flutter 客户端当前包含：
 
 Celechron 是教务网课程表/考试相关工具，可参考教务网请求参数、课程表结构、节次/周次/地点解析和异常处理。
 
-它不是本项目依赖。Flutter 当前的教务网实现位于 `apps/flutter/lib/data/campus_session.dart` 和 `apps/flutter/lib/application/campus.dart`；旧 Web 实现使用 `packages/zju-services`。
+它不是本项目依赖。Flutter 当前的教务网实现位于 `lib/data/campus_session.dart` 和 `lib/application/campus.dart`；旧 Web 实现使用 `archive/packages/zju-services`。
 
 ## 4. 总体架构
 
 ### 4.1 当前 Flutter 架构
 
 ```text
-Flutter UI (apps/flutter/lib/ui)
+Flutter UI (lib/ui)
         │
         ├── Riverpod providers / AppServices
         │       │
@@ -117,12 +117,12 @@ Flutter UI (apps/flutter/lib/ui)
 ### 4.2 旧 Web/Electron/Node 架构
 
 ```text
-React UI (apps/web)
+React UI (archive/apps/web)
         │ HTTP + 本地访问 token
         ▼
-Fastify (packages/server, 127.0.0.1:7788)
-        ├── packages/llm
-        ├── packages/zju-services ── login-zju
+Fastify (archive/packages/server, 127.0.0.1:7788)
+        ├── archive/packages/llm
+        ├── archive/packages/zju-services ── login-zju
         ├── Agent / SSE / confirmation
         └── SQLite + 加密凭据 + 下载记录
 ```
@@ -132,35 +132,24 @@ Fastify (packages/server, 127.0.0.1:7788)
 ## 5. 仓库结构与模块职责
 
 ```text
-apps/
-├── flutter/
-│   ├── assets/
-│   │   ├── prompts.json
-│   │   ├── knowledge.json
-│   │   └── calendars.json
-│   ├── lib/
-│   │   ├── application/
-│   │   ├── data/
-│   │   ├── domain/
-│   │   ├── platform/
-│   │   └── ui/
-│   ├── test/
-│   └── integration_test/
-├── web/                         # 旧 React SPA
-└── desktop/                     # 旧 Electron 壳
+android/                         # Flutter Android 宿主
+assets/                          # Flutter 资源、提示词和知识库
+integration_test/
+lib/                             # Flutter 应用源码
+test/
+tool/
+windows/                         # Flutter Windows 宿主
 
-packages/
-├── core/                        # 旧 Web/Node 共用领域类型和纯函数
-├── llm/                         # 旧 Node LLM 适配层
-├── server/                      # 旧 Fastify 服务
-├── zju-services/                # 旧 login-zju 适配层
-├── storage/                     # 预留抽象
-└── scheduler/                   # 预留抽象
+archive/
+├── apps/web/                    # 旧 React SPA 和 Web 挂件
+├── apps/desktop/                # 旧 Electron 壳、托盘和挂件
+├── packages/                    # 旧 Node workspace 包
+└── scripts/                     # 旧开发脚本
 ```
 
 ### 5.1 Flutter 入口和路由
 
-入口是 `apps/flutter/lib/main.dart`，负责：
+入口是 `lib/main.dart`，负责：
 
 - 初始化 Flutter binding。
 - 判断 Windows 主窗口或桌面挂件窗口。
@@ -212,7 +201,7 @@ packages/
 
 原 6701 行的集中页面实现及兼容导出入口已移除。`FeaturePage` 只把路由映射到独立页面，每个页面拥有自己的 State、筛选条件和页面上下文；路由切换不再依赖同一个 State 中的业务分支。
 
-| 页面 | 入口（相对 `apps/flutter/lib/ui/pages`） |
+| 页面 | 入口（相对 `lib/ui/pages`） |
 | --- | --- |
 | 工作台 | `dashboard_page.dart` |
 | 课程表 | `courses_page.dart` |
@@ -222,7 +211,7 @@ packages/
 | 下载中心 | `downloads_page.dart` |
 | 智云课堂占位页 | `classroom_page.dart` |
 
-工作台和课程页共用 `CourseOverviewState` 管理辅助栏，并通过 `CourseActions` 打开课程详情。页面只组合组件和管理交互，数据加载归 `application/page_loaders/`，课程聚合/匹配归 `application/`，纯规则归 `domain/`；业务模块不得反向依赖 UI。应用入口和测试直接导入所属模块，不重新建立集中导出文件。详细导航见 [Flutter 页面模块说明](apps/flutter/lib/ui/pages/README.md)。
+工作台和课程页共用 `CourseOverviewState` 管理辅助栏，并通过 `CourseActions` 打开课程详情。页面只组合组件和管理交互，数据加载归 `application/page_loaders/`，课程聚合/匹配归 `application/`，纯规则归 `domain/`；业务模块不得反向依赖 UI。应用入口和测试直接导入所属模块，不重新建立集中导出文件。详细导航见 [Flutter 页面模块说明](lib/ui/pages/README.md)。
 
 ## 6. Flutter 技术栈与开发命令
 
@@ -237,7 +226,7 @@ packages/
 
 ### 6.2 常用命令
 
-在 `apps/flutter` 目录执行：
+在项目根目录执行：
 
 ```powershell
 flutter pub get
@@ -250,7 +239,7 @@ flutter test integration_test/native_storage_test.dart -d windows
 
 Windows 发布包必须携带完整的 `build/windows/x64/runner/Release` 目录，包括 DLL 和 `data`；不能只复制 exe。构建需要 Visual Studio C++ 桌面开发工作负载和 Windows SDK。
 
-合并代码后先执行 `flutter pub get`，同步本机包解析配置。服务字段/构造初始化变更后，热重载可能保留不兼容的旧实例；出现 `FileService._root` 空值类型异常时执行 Hot Restart（终端大写 `R`）或停止后重新启动。Windows 构建/原生测试若因运行中的同路径 EXE 报 `LNK1168`，先退出该客户端再重试。详见 [Flutter 开发排错](apps/flutter/README.md#开发排错)。
+合并代码后先执行 `flutter pub get`，同步本机包解析配置。服务字段/构造初始化变更后，热重载可能保留不兼容的旧实例；出现 `FileService._root` 空值类型异常时执行 Hot Restart（终端大写 `R`）或停止后重新启动。Windows 构建/原生测试若因运行中的同路径 EXE 报 `LNK1168`，先退出该客户端再重试。详见 [Flutter 开发排错](docs/flutter.md#开发排错)。
 
 公开登录传输检查：
 
@@ -289,7 +278,7 @@ flutter test integration_test/native_login_test.dart -d windows --dart-define=VE
 
 ### 7.1 凭据与会话
 
-`apps/flutter/lib/data/campus_session.dart` 直接维护校园请求会话：
+`lib/data/campus_session.dart` 直接维护校园请求会话：
 
 - 账号密码从 `FlutterSecureStorage` 读取，不进入 Drift 普通表。
 - ZJUAM/CAS、学在浙大和教务网使用分开的内存 cookie jar。
@@ -363,10 +352,10 @@ Flutter 课表使用教务网 `kbcx/xskbcx_cxXsKb.html` 端点，并按秋/冬�
 
 - 公开 Celechron 校历 JSON 优先，失败时使用 `assets/calendars.json`。
 - 公开校历当前请求地址是 `http://calendar.celechron.top/<semester>.json`，不是 HTTPS；Android 的 `network_security_config.xml` 只为这个域名显式允许明文请求，其他远程明文请求仍禁止。移动端/网络不可用时依赖仓库内置校历回退。
-- `apps/flutter/lib/domain/schedule.dart` 是 Flutter 当前节次和北京时间逻辑的唯一来源。
+- `lib/domain/schedule.dart` 是 Flutter 当前节次和北京时间逻辑的唯一来源。
 - 课程产品实际只有 1–13 节，当前课表视觉网格也只绘制 1–13 节。`sessionTimes` 中第 14、15 项是遗留的晚间时间数据，不代表存在第 14、15 节课；后续应清理或明确隔离。
 - 工作台未来 48 小时日程和桌面挂件都使用同一套北京时间/校历投影逻辑。
-- 旧 Web 使用 `packages/core/src/domain/schedule.ts`，不要把 Flutter 的时间表改到旧包里，或在页面中重新抄一份时间。
+- 旧 Web 使用 `archive/packages/core/src/domain/schedule.ts`，不要把 Flutter 的时间表改到旧包里，或在页面中重新抄一份时间。
 
 ### 7.6 预留服务
 
@@ -468,7 +457,7 @@ enabled
 
 ### 9.3 提示词资产
 
-Flutter 当前提示词资产是 `apps/flutter/assets/prompts.json`，不是旧 Node 服务的 Markdown/服务端提示词目录。加载流程必须：
+Flutter 当前提示词资产是 `assets/prompts.json`，不是旧 Node 服务的 Markdown/服务端提示词目录。加载流程必须：
 
 1. 通过 `rootBundle.loadString(..., cache: false)` 读取资产。
 2. 解析 JSON。
@@ -480,7 +469,7 @@ Flutter 当前提示词资产是 `apps/flutter/assets/prompts.json`，不是旧 
 
 ### 9.4 校园知识库
 
-Flutter 使用 `apps/flutter/assets/knowledge.json`，它是从 CC98《浙江大学本科新生指引》（2026 版）整理的本地 JSON 资产。`application/knowledge.dart` 负责：
+Flutter 使用 `assets/knowledge.json`，它是从 CC98《浙江大学本科新生指引》（2026 版）整理的本地 JSON 资产。`application/knowledge.dart` 负责：
 
 - 资产加载和内存缓存。
 - 中文 2-gram + 英文词分词。
@@ -489,7 +478,7 @@ Flutter 使用 `apps/flutter/assets/knowledge.json`，它是从 CC98《浙江大
 
 知识库全文不常驻模型上下文。系统提示词只注入目录/使用规则，回答前按需调用搜索工具。回答应标注参考《浙江大学本科新生指引》；政策类问题还应提醒以学校官方最新通知为准。检索不到时必须如实说明，不能用通用大学常识冒充浙大规定。
 
-旧 Web 的知识库在 `packages/server/knowledge/*.md`，由 `packages/server/src/knowledge` 加载和检索。两种资产格式、路径和打包方式不同。
+旧 Web 的知识库在 `archive/packages/server/knowledge/*.md`，由 `archive/packages/server/src/knowledge` 加载和检索。两种资产格式、路径和打包方式不同。
 
 ## 10. 页面与交互规格
 
@@ -722,22 +711,22 @@ Flutter 使用 `CampusShell`：
 
 ### 14.1 旧路由和包
 
-- `packages/server/src/server.ts` 统一注册旧 Fastify 路由。
+- `archive/packages/server/src/server.ts` 统一注册旧 Fastify 路由。
 - `/api/settings`：应用设置和模型来源。
 - `/api/auth`：ZJU 凭据、验证和退出。
 - `/api/zju`：学在浙大、教务网、通知等校园数据。
 - `/api/files`：下载记录、预览和文件操作。
 - `/api/agent`：聊天、SSE、确认和会话。
-- `apps/web/src/api` 使用 TanStack Query 调用这些路由。
+- `archive/apps/web/src/api` 使用 TanStack Query 调用这些路由。
 
 ### 14.2 旧 Web 仍需遵守的陷阱
 
 - `wrap()` 双层信封：异步 handler 内只返回裸数据。
 - 学在浙大文件下载端点使用上传 `id`，不是 `reference_id`。
 - `joinUrl()` 只在 base URL 没有版本段时追加 `/v1`，智谱等 `/v4` 地址不能重复追加。
-- 旧课表时间源是 `packages/core/src/domain/schedule.ts`；不要把旧 Web 的时间逻辑复制到 Flutter。
-- 旧知识库是 `packages/server/knowledge/*.md`；不要把 Markdown 目录路径写入 Flutter 的资产加载逻辑。
-- Electron 的原生 acrylic 在无边框、透明、置顶窗口上会出现灰板；这一实验结论只对 `apps/desktop` 旧挂件有效，不适用于 Flutter 桌面宿主。
+- 旧课表时间源是 `archive/packages/core/src/domain/schedule.ts`；不要把旧 Web 的时间逻辑复制到 Flutter。
+- 旧知识库是 `archive/packages/server/knowledge/*.md`；不要把 Markdown 目录路径写入 Flutter 的资产加载逻辑。
+- Electron 的原生 acrylic 在无边框、透明、置顶窗口上会出现灰板；这一实验结论只对 `archive/apps/desktop` 旧挂件有效，不适用于 Flutter 桌面宿主。
 
 ## 15. 迁移和开发路线
 
@@ -775,7 +764,7 @@ Flutter 使用 `CampusShell`：
 
 ### 16.1 Flutter 自动测试
 
-在 `apps/flutter` 执行：
+在项目根目录执行：
 
 ```powershell
 flutter test
@@ -875,6 +864,7 @@ flutter test integration_test/native_login_test.dart -d windows --dart-define=VE
 旧链路修改后执行：
 
 ```powershell
+cd archive
 pnpm typecheck
 pnpm lint
 pnpm test
@@ -919,7 +909,7 @@ UNKNOWN_ERROR
 ## 18. 给后续实现模型的注意事项
 
 1. 先判断任务属于当前 Flutter 实现还是旧 Web/Electron/Node 实现；默认处理 Flutter。
-2. 用户说“参考 Web”通常表示对齐旧 Web 的视觉/交互，不表示修改 `apps/web`。
+2. 用户说“参考 Web”通常表示对齐旧 Web 的视觉/交互，不表示修改 `archive/apps/web`。
 3. 不要把 `login-zju` 引入 Flutter 或浏览器，不要复制上游登录源码。
 4. 不要把密码、cookie、ticket、API key 写日志或提交；错误和审计只记录脱敏摘要。
 5. 所有异步工作完成后再同步更新 Flutter widget 状态，不要把 `async` 闭包传给 `setState`。
@@ -930,8 +920,8 @@ UNKNOWN_ERROR
 10. 大文件操作必须可取消、流式、临时文件落盘，不能锁住整个页面或与删除/重新下载竞争同一资源。
 11. 新增纯函数时增加对应测试；修改认证、模型 URL、文件路径和提示词资源时必须增加回归覆盖。
 12. 不要执行 `git reset --hard`、覆盖用户未提交修改或其他破坏性操作，除非用户明确要求。
-13. 修改 `start-dev.bat` / `stop-dev.bat` 时保持 GBK + CRLF；不要直接用普通 UTF-8 编辑器保存。
-14. `packages/core` 的课表时间和 Flutter `domain/schedule.dart` 是两套实现，修改前先确认目标运行时。
+13. 修改 `archive/start-dev.bat` / `archive/stop-dev.bat` 时保持 GBK + CRLF；不要直接用普通 UTF-8 编辑器保存。
+14. `archive/packages/core` 的课表时间和 Flutter `domain/schedule.dart` 是两套实现，修改前先确认目标运行时。
 15. 页面按 `ui/pages/`、功能组件、`application/page_loaders/` 和 `domain/` 分层维护；不重建集中页面文件或兼容导出入口。更新时间来自实际缓存依赖，弹层必须订阅状态变化，不能用当前时间掩盖刷新失败。
 
 ## 19. 默认假设

@@ -6,7 +6,7 @@
 
 要求 Flutter >=3.44、Dart >=3.12（与 go_router 18 的最低要求一致）。依赖版本由 `pubspec.lock` 固定，请提交锁文件以保持 Windows 和 Android 构建一致。
 
-将符合版本要求的 Flutter 加入 PATH 后，在本目录执行：
+将符合版本要求的 Flutter 加入 PATH 后，在仓库根目录执行：
 
 ```powershell
 flutter pub get
@@ -72,7 +72,7 @@ Windows 挂件使用 `desktop_multi_window` 创建一个子窗口，展示层级
 | `application/course_overview.dart`、`application/course_details.dart` | 教务网课程聚合、课程查找与课表信息补全 |
 | `domain/course_catalog.dart`、`grade_stats.dart`、`assignment_rules.dart`、`timetable_options.dart`、`formatters.dart` | 课程规范化、统计、作业规则、小学期筛选和格式化 |
 
-页面加载器和领域规则不反向依赖 UI；页面上下文模型仍在 `domain/page_context.dart`，悬浮聊天窗仍在 `ui/chat.dart`。完整页面列表和新增页面约定见 [页面模块导航](lib/ui/pages/README.md)，仓库协作约定见 [AGENTS.md](../../AGENTS.md)。
+页面加载器和领域规则不反向依赖 UI；页面上下文模型仍在 `domain/page_context.dart`，悬浮聊天窗仍在 `ui/chat.dart`。完整页面列表和新增页面约定见 [页面模块导航](../lib/ui/pages/README.md)，仓库协作约定见 [AGENTS.md](../AGENTS.md)。
 
 ## 登录验证
 
