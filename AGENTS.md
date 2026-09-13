@@ -1,7 +1,7 @@
 # AGENTS.md — 项目导航与协作约定
 
-> 本文档按 2026-09-12 的实际代码状态维护，供后续编码助手快速定位当前实现、历史实现和验证方式。
-> 本仓库正在从 React/Electron 客户端迁移到 Flutter 客户端。涉及界面、交互或本地数据时，默认以 `apps/flutter` 为当前实现；除非用户明确要求，不要为了 Flutter 需求修改旧的 `apps/web`。
+> 本文档按 2026-09-13 的实际代码状态维护，供后续编码助手快速定位当前实现、历史实现和验证方式。
+> 本仓库正在从 React/Electron 客户端迁移到 Flutter 客户端。涉及界面、交互或本地数据时，默认以仓库根目录的 Flutter 工程为当前实现；除非用户明确要求，不要为了 Flutter 需求修改旧的 `archive/apps/web`。
 
 ## 1. 项目概览
 
@@ -9,15 +9,17 @@
 
 | 实现 | 当前定位 | 数据与服务方式 |
 | --- | --- | --- |
-| `apps/flutter` | **当前主实现**，Windows 桌面客户端，正在做迁移后的功能和界面验收 | Flutter 客户端直接访问校园服务、模型服务并使用本地 SQLite/安全存储 |
-| `apps/web` + `apps/desktop` + `packages/*` | 旧的 React SPA/Electron/Node 实现，作为历史 Web 版本和参考实现保留 | React 通过本机 Fastify 服务访问 ZJU、LLM 和本地数据库 |
+| 仓库根目录 | **当前主实现**，Windows 桌面客户端，正在做迁移后的功能和界面验收 | Flutter 客户端直接访问校园服务、模型服务并使用本地 SQLite/安全存储 |
+| `archive/apps/web` + `archive/apps/desktop` + `archive/packages/*` | 旧的 React SPA/Electron/Node 实现，作为历史 Web 版本和参考实现保留 | React 通过本机 Fastify 服务访问 ZJU、LLM 和本地数据库 |
 
 两套实现共享产品目标，但不是同一套运行时。旧实现中的约束、路径和数据目录不能直接套用到 Flutter。
+
+当前 Flutter 客户端在 Windows 和 Android 上的用户可见应用名称为**求是助手**；`zju_campus_agent` 包名、应用 ID、技术目录和 `zju_campus_agent.exe` 文件名属于内部兼容标识，不要仅因改名而修改。
 
 安全边界仍然适用于整个项目：
 
 - 不要把浙大密码、cookie 或模型 API key 写进日志、源码、提交记录或普通业务数据库。
-- `login-zju` 只允许由旧 Node 服务端的 `packages/zju-services` 使用；Flutter 必须使用自己的协议实现，不得 import Node 包，也不得复制上游源码。
+- `login-zju` 只允许由旧 Node 服务端的 `archive/packages/zju-services` 使用；Flutter 必须使用自己的协议实现，不得 import Node 包，也不得复制上游源码。
 - Flutter 端的凭据只进入系统安全存储；校园 cookie 仅保存在内存中的分服务 cookie jar。
 - 旧 Node 服务只绑定 `127.0.0.1`，默认端口 7788；这一点只属于旧 Web/Electron 运行链路。
 
@@ -25,7 +27,7 @@
 
 ### Flutter（当前主实现）
 
-在 `apps/flutter` 目录执行：
+在项目根目录执行：
 
 ```bash
 flutter pub get
@@ -45,11 +47,16 @@ flutter test integration_test/native_login_test.dart -d windows --dart-define=VE
 
 Flutter 要求 Flutter >= 3.44、Dart >= 3.12。`pubspec.lock` 应提交。Windows 发布时必须保留完整的 `build/windows/x64/runner/Release`，包括 DLL 和 `data` 目录；本机需要 Visual Studio C++ Desktop workload 和 Windows SDK。
 
+- 合并代码或依赖声明变化后先执行 `flutter pub get`，再使用 `--no-pub` 检查。`domain/webvpn.dart` 使用 `pointycastle` 4.0.0；若声明和锁文件已有该包但仍无法解析，应刷新本机 `.dart_tool/package_config.json`，不要手工修改生成文件或删掉加密实现。
+- 服务字段或构造初始化发生变化后，旧实例可能在热重载中保留。出现 `FileService._root` 为 null 的类型错误时，先执行 Hot Restart（`flutter run` 终端按大写 `R`）或停止后重新启动；不要为旧内存状态加入空目录兜底。详见 [Flutter 开发排错](docs/flutter.md#开发排错)。
+- Windows 构建/原生测试遇到 `LNK1168` 无法写入 `zju_campus_agent.exe` 时，先检查是否有同一路径的客户端仍在运行；退出相应调试进程后重试，不要将 EXE 占用误判为 Dart 编译错误。
+
 ### 旧 Web/Electron/Node 实现
 
-在仓库根目录执行：
+在 `archive` 目录执行：
 
 ```bash
+cd archive
 pnpm install
 pnpm dev:server
 pnpm dev:web
@@ -60,46 +67,48 @@ pnpm build
 pnpm --filter @zju-agent/web build
 ```
 
-Windows 旧开发链路也可以使用根目录 `start-dev.bat` / `stop-dev.bat`。它们通过 `scripts/dev-launcher.mjs` 隐藏托管 Fastify、Vite 和 Electron 托盘/挂件；两个 bat 文件是 GBK + CRLF，修改时不要转换编码。
+Windows 旧开发链路也可以使用 `archive/start-dev.bat` / `archive/stop-dev.bat`。它们通过 `archive/scripts/dev-launcher.mjs` 隐藏托管 Fastify、Vite 和 Electron 托盘/挂件；两个 bat 文件是 GBK + CRLF，修改时不要转换编码。
 
 ## 3. 仓库布局
 
 ```text
 zju-agent-new/
 ├── AGENTS.md
-├── CLAUDE.md
 ├── README.md                         # Flutter 当前实现简介、运行和安全说明
 ├── ZJU_CAMPUS_AGENT_PROJECT.md
-├── apps/
-│   ├── flutter/                      # 当前 Flutter 客户端
-│   ├── web/                          # 旧 React SPA，勿因 Flutter 需求修改
-│   └── desktop/                      # 旧 Electron 壳、托盘和挂件
-├── packages/
-│   ├── core/                         # 旧 Web/Node 共用领域类型和纯函数
-│   ├── llm/                          # 旧 Node LLM 适配层
-│   ├── server/                       # 旧 Fastify 服务
-│   ├── zju-services/                 # 旧 Node login-zju 适配层
-│   ├── storage/                      # 预留抽象
-│   └── scheduler/                    # 预留抽象
+├── android/                          # Flutter Android 宿主
+├── assets/                           # Flutter 资源、提示词和知识库
+├── integration_test/
+├── lib/                              # Flutter 应用源码
+├── test/
+├── tool/
+├── windows/                          # Flutter Windows 宿主
+├── archive/                          # 旧 Web/Electron/Node 实现
+│   ├── apps/web/                     # 旧 React SPA 和 Web 挂件
+│   ├── apps/desktop/                 # 旧 Electron 壳、托盘和挂件
+│   ├── packages/                     # 旧 Node workspace 包
+│   └── scripts/                      # 旧开发脚本
 └── docs/
 ```
 
-根目录是 pnpm workspace（`apps/*`、`packages/*`）；`apps/flutter` 没有 `package.json`，不是 pnpm 包。
+仓库根目录是 Flutter 工程；旧 Node/pnpm workspace 的 `package.json`、锁文件和配置位于 `archive/`，不属于当前 Flutter 运行链路。
 
 ## 4. Flutter 当前架构
 
 ### 4.1 启动和路由
 
-- `apps/flutter/lib/main.dart` 初始化 Flutter binding、`AppServices`、`DesktopHost` 和 Riverpod。
+- `lib/main.dart` 初始化 Flutter binding、`AppServices`、`DesktopHost` 和 Riverpod。
 - 当前路由包括 `/`、`/courses`、`/assignments`、`/exams`、`/school-info`、`/downloads`、`/settings`、`/setup`、`/classroom`；`/dashboard`、`/toolbox`、`/chat` 仅是兼容别名并重定向到首页。
 - `ui/pages/feature_page.dart` 仅负责路由到独立页面；工作台、课程表、作业、考试、通知、下载和课堂占位页各自在 `ui/pages/*_page.dart` 中管理状态。代码直接导入所属模块，不保留旧的集中导出入口；`ui/chat.dart` 是唯一在用的全局悬浮 AI 对话窗。
-- 页面通用加载、首次刷新和缓存订阅位于 `ui/shared/campus_page.dart`；课表、课程辅助栏和详情位于 `ui/courses/`，作业、考试、下载与工作台组件分别位于 `ui/assignments/`、`ui/exams/`、`ui/downloads/`、`ui/dashboard/`。课程总览聚合与详情匹配位于 `application/course_overview.dart`、`application/course_details.dart`，页面数据加载器位于 `application/page_loaders/`；成绩计算、课程规范化、作业规则和小学期过滤位于 `domain/`，这些模块不依赖 UI。详细入口见 `apps/flutter/lib/ui/pages/README.md`。
+- 页面通用加载、首次刷新和缓存订阅位于 `ui/shared/campus_page.dart`；课表、课程辅助栏和详情位于 `ui/courses/`，作业、考试、下载与工作台组件分别位于 `ui/assignments/`、`ui/exams/`、`ui/downloads/`、`ui/dashboard/`。课程总览聚合与详情匹配位于 `application/course_overview.dart`、`application/course_details.dart`，页面数据加载器位于 `application/page_loaders/`；成绩计算、课程规范化、作业规则和小学期过滤位于 `domain/`，这些模块不依赖 UI。详细入口见 `lib/ui/pages/README.md`。
 - `ui/theme.dart` 集中定义宣纸色、卡纸色、墨色、蓝色、金色和印章色；不要在页面里重复创建一套颜色。
 
 ### 4.2 外壳与响应式行为
 
 - `CampusShell` 以宽度 >= 1024 作为桌面布局：左侧导航栏宽 240；窄屏使用 AppBar、右上角下载/设置入口和底部导航。
 - 桌面主窗口默认 1320×900，最小 800×600。
+- Windows 桌面挂件由 `desktop_multi_window` 创建一个子窗口承载；展开面板与 64×64 小球是同一个 `WidgetApp` 的内部状态，不能拆成两个原生窗口。`DesktopHost.initialize` 会复用已有的 `widget:*` 子窗口并隐藏重复实例，避免热重载/热重启后叠出多个挂件。
+- 挂件窗口使用透明背景、无标题栏/无边框、无阴影、置顶且不进入任务栏；`windows/runner/flutter_window.cpp` 只调整 secondary window 的 Win32 样式，主窗口保持普通边框。日程点按通过主窗口的 `open('/')` 回调跳转工作台。
 - 右侧辅助面板在宽屏显示；窄屏通过页面上的入口/FAB 调出底部面板。课程页保留这一行为；作业筛选已并入主内容，考试页不再保留冗余右栏。
 - 页面首次进入时由 `AppServices.claimInitialRefresh(pageKey)` 控制本次应用运行内的一次**强制刷新**，避免手机端每次下拉通知栏或生命周期变化都重新请求。之后由用户主动刷新，手动刷新同样强制绕过缓存；学校信息页不使用下拉刷新。除本地下载页和占位页外，数据页使用一天有效的本地缓存，并在标题区域显示“数据更新于 N 分钟前”。
 - 刷新/缓存约定：首次进入按稳定的 `pageKey` 只自动强制刷新一次；重复进入、路由重建和普通生命周期变化不自动请求。用户点击刷新或下拉刷新时必须强制请求最新数据。通知页使用两路独立的一天缓存，不提供下拉刷新但保留强制刷新按钮；下载页不参与网络数据缓存和更新时间提示。
@@ -173,7 +182,7 @@ zju-agent-new/
     - **移动端与窄屏适配**：移动端下将左侧“节次/时间”列宽精简至 30px（表头显示“节次\n时间”，节次与时间文字紧凑靠左居中），节省出的 34px 横向空间全部分配给 7 天的课程色块；课程色块外边距收窄为 1px，左右内边距紧凑为 2px，显著拓宽色块净显示宽度；课程字体调至 8.5px，严格保证移动端一行显示 3 个字；课程名支持展示 3 行（`maxLines: 3`），格式化严格按每行 3 个字分行（杜绝 4-3-1 等怪异折行），超过 8 个字时自动规范截断为前 8 个字符后加省略号（3+3+2...），最多显示 8 个字再省略，兼顾小屏清晰识别与紧凑排版。
     - **秋/冬小学期分段切换**：在课程表表头下方提供“学期分段”胶囊按钮组（如秋冬学期提供“秋学期”、“冬学期”，春夏学期提供“春学期”、“夏学期”；不设“全部”选项以杜绝同一时段重叠课视觉冲突）。默认选中当前大学期的首个小学期；支持纯前端/本地快速切换，切换大学期时自适应重置；全学期通开课程（`subSemester` 为空或秋冬通开）在两段均予以保留；课程卡片周次文本同步展示小学期前缀（如“秋 1-8 周”），导出图片时正式标题联动携带分段后缀。
     - **课程色块点按交互**：课程色块包裹 `InkWell` 点击事件（`onSelectCourse` 回调），通过 `CourseActions.openTimetableCourse` 匹配课程列表并丰富上课时间、教室、教师属性后，调起对应课程详情抽屉。
-- 课程产品的节次范围是 1–13 节，课表视觉网格当前也只画 1–13 节。`apps/flutter/lib/domain/schedule.dart` 的 `sessionTimes` 中第 14、15 项属于遗留的晚间时间数据，不得当作有效课程节次；后续应清理或明确隔离。旧 Web 仍使用 `packages/core/src/domain/schedule.ts`，两者不要混写。
+- 课程产品的节次范围是 1–13 节，课表视觉网格当前也只画 1–13 节。`lib/domain/schedule.dart` 的 `sessionTimes` 中第 14、15 项属于遗留的晚间时间数据，不得当作有效课程节次；后续应清理或明确隔离。旧 Web 仍使用 `archive/packages/core/src/domain/schedule.ts`，两者不要混写。
 - 课表、考试、成绩数据来自教务网；学在浙大主要提供课程、课件、作业和测验。考试安排页（`ExamsPage`）学期选择器采用统一单行水平平滑滚动胶囊按钮组（`_HorizontalExamSemesterTabs`），与课表表头及辅助栏设计语言统一，全应用统一依托 `NoScrollbarScrollBehavior` 彻底杜绝桌面端原生横向滑条（scrollbar），并支持鼠标滚轮横滑、触控拖拽与 `_scrollToSelected` 自动定位。
 - 学校信息页直接读取素质拓展平台和教务网公开通知接口。`stripHtmlText` 必须在展示摘要前去掉 HTML 标签，并保留合理换行；教务发布人字段是 `xwfbr`。
 
@@ -200,7 +209,10 @@ zju-agent-new/
 
 ## 6. Flutter 文件下载与备份
 
-- `application/files.dart` 使用本地 `downloads` 根目录，文件按课程建立子目录；文件名会清理非法字符，同名文件由系统式的 `file (1).ext` 处理。
+- `application/files.dart` 默认使用应用支持目录下的 `downloads`；下载页支持选择自定义目录或恢复默认，设置页不再提供下载目录配置，只保留备份导入/导出。文件按课程建立子目录，文件名清理非法字符，同名文件由系统式的 `file (1).ext` 处理。
+- 下载目录统一由 `FileService.setDownloadDirectory(String?)` 切换并持久化到 `settings/app.downloadDirectory`；`AppServices.applyDownloadDirectory` 委托该方法并返回 `files.root`。启动从同一字段恢复目录；null、空白或默认路径恢复 `files.defaultRoot` 并移除配置，保留其他应用设置。
+- `FileService` 没有 `moveRoot` 方法。`services.dart` 中读取 `settings/app.downloadDir`、回退系统下载目录的 `downloadDirectory()` 是遗留辅助函数，当前启动和切换链路均不使用；不要重新接入这套不一致的配置逻辑。
+- 切换目录不搬迁已有文件。下载记录用 `relativePath` 与记录级 `downloadDir` 定位文件，`FileService.file()` 依次查找记录目录、当前目录与默认目录。当前 `downloads_loader.dart` 的 `exists` 仍只检查当前根目录，可能把原目录中的文件标为已移除；这是尚未统一的页面状态边界，不能宣称旧文件在下载页的展示已完全修复。
 - 学在浙大文件下载始终使用上传 `id`，不能把 `reference_id` 当成下载端点的 id。Office 文件预览可使用 `officePdf=true` 获取 PDF。
 - 大文件下载先写入临时 `.part` 文件，完成后再原子改名；传输采用流式读取和背压，单文件上限 512 MB。删除前要取消对应活动流，不能让删除和重新下载争抢同一路径。
 - 下载操作不应阻塞页面上的其他按钮；下载页的预览、打开、删除和重新下载状态必须独立管理。批量下载应复用同一套并发/取消/错误处理逻辑。
@@ -224,7 +236,7 @@ zju-agent-new/
 
 ### 7.2 提示词资产
 
-- 当前提示词资产是 `apps/flutter/assets/prompts.json`，由 `rootBundle.loadString(..., cache: false)` 加载并校验 `SYSTEM_PROMPT_TPL`、`GUIDE_RULES`、`BRIEF_RULES`。
+- 当前提示词资产是 `assets/prompts.json`，由 `rootBundle.loadString(..., cache: false)` 加载并校验 `SYSTEM_PROMPT_TPL`、`GUIDE_RULES`、`BRIEF_RULES`。
 - 资产缺失、JSON 无效或字段不完整时应报告明确的 `PROMPT_ASSET_*` 阶段错误；不要用静默空字符串掩盖资源打包问题，也不要把空响应当作正常回答。
 - 修改提示词资产后同时检查 `pubspec.yaml` 的 assets 声明、运行目录和测试 binding。提示词加载问题优先排查资源路径/打包和字段校验，不要只改 UI 错误提示。
 
@@ -242,16 +254,16 @@ zju-agent-new/
 - `ui/avatar.dart` 提供默认圆形头像、文件选择和 data URL 压缩；设置页应直接显示圆形头像，首页顶部问候区和聊天头像复用同一设置。
 - 个性化设置和其他应用设置一起整体保存；保存前必须展开已有设置，不能只 PUT 修改字段而清空下载目录等其他配置。
 - `platform/desktop.dart` 是当前 Flutter Windows 桌面宿主，使用 `desktop_multi_window`、`window_manager` 和 `tray_manager`；它不是旧 Electron 实现。
-- Flutter 挂件是透明无边框、置顶的小窗，显示未来 48 小时日程/待办并提供只读一次性问答。旧 Electron 挂件的材质结论只适用于 `apps/desktop`，不要据此给 Flutter 窗口引入 Electron API。
+- Flutter 挂件复刻旧 Web 挂件的展示层级，仍复用当前 `upcoming()` 日程数据和 `AgentService.chat(widget: true)` 只读问答链路；显示未来 48 小时日程/待办，日程点按打开主窗口工作台。展开面板与“求是”小球属于同一个透明无边框、无阴影、置顶子窗口，分别通过 380×560 与 64×64 的窗口尺寸切换；`DesktopHost` 负责复用已有挂件并隐藏重复实例。旧 Electron 挂件的材质结论只适用于 `archive/apps/desktop`，不要据此给 Flutter 窗口引入 Electron API。
 
 ## 9. 旧 Web/Electron/Node 架构（仅供维护旧实现或对照）
 
 以下内容仍对旧链路有效，但不是 Flutter 的实现说明：
 
-- `apps/web` 是 React 18 + Vite + TanStack Query SPA；`apps/desktop` 是 Electron 壳；`packages/server` 是 Fastify 服务，默认监听 127.0.0.1:7788。
-- 旧 Web 通过 `/api` 访问服务；`packages/server` 负责设置、认证、ZJU 课程/教务、通知、文件和 Agent SSE 路由。`packages/zju-services` 封装 `login-zju`。
-- 旧 Web 的知识库是 `packages/server/knowledge/*.md`，由 `packages/server/src/knowledge` 检索并由 Electron extraResources 打包；Flutter 使用 `apps/flutter/assets/knowledge.json`，两套资产和加载器不同。
-- 旧 Web 的课表时间源是 `packages/core/src/domain/schedule.ts`，课表网格是 `apps/web/src/components/TimetableGrid.tsx` 的 CSS Grid；不要把旧 Web 的组件直接搬进 Flutter。
+- `archive/apps/web` 是 React 18 + Vite + TanStack Query SPA；`archive/apps/desktop` 是 Electron 壳；`archive/packages/server` 是 Fastify 服务，默认监听 127.0.0.1:7788。
+- 旧 Web 通过 `/api` 访问服务；`archive/packages/server` 负责设置、认证、ZJU 课程/教务、通知、文件和 Agent SSE 路由。`archive/packages/zju-services` 封装 `login-zju`。
+- 旧 Web 的知识库是 `archive/packages/server/knowledge/*.md`，由 `archive/packages/server/src/knowledge` 检索并由 Electron extraResources 打包；Flutter 使用 `assets/knowledge.json`，两套资产和加载器不同。
+- 旧 Web 的课表时间源是 `archive/packages/core/src/domain/schedule.ts`，课表网格是 `archive/apps/web/src/components/TimetableGrid.tsx` 的 CSS Grid；不要把旧 Web 的组件直接搬进 Flutter。
 - 旧 Web 的 `wrap()` 已有双层信封陷阱：`wrap(async () => ...)` 内返回原始值，不要再次返回 `ok(...)`。文件下载端点同样必须使用上传 `id`。
 - 旧 Web 的凭据由 Node 端 AES-256-GCM 加密文件保存，旧数据目录通常为 `~/.zju-campus-agent/`；这不等于 Flutter 的 `getApplicationSupportDirectory()` 和系统安全存储。
 
@@ -265,7 +277,7 @@ zju-agent-new/
 6. 页面更新时间只能来自实际展示依赖的缓存记录；组合数据取最早依赖时间，不能用请求完成时间或无关历史缓存时间覆盖它。
 7. 资源文件改动要同步检查 `pubspec.yaml` 打包声明；不要用 fallback 空提示词掩盖资源缺失。
 8. 不要执行破坏性 Git 操作（如 `git reset --hard`、覆盖用户未提交修改），除非用户明确要求。
-9. 修改 `start-dev.bat` / `stop-dev.bat` 时保持 GBK + CRLF；不要用普通 UTF-8 编辑器直接保存。
+9. 修改 `archive/start-dev.bat` / `archive/stop-dev.bat` 时保持 GBK + CRLF；不要用普通 UTF-8 编辑器直接保存。
 10. 新增页面放在 `ui/pages/` 并独立管理状态；组件放入所属功能目录，页面数据组合放在 `application/page_loaders/`，纯业务规则放在 `domain/`。不要重新建立集中页面文件或兼容导出入口，业务模块不得反向依赖 UI。
 
 ## 11. 测试和验收
@@ -274,12 +286,14 @@ zju-agent-new/
 
 当前测试覆盖依赖兼容性、领域模型/课表、LLM URL 和请求、登录 cookie、认证协议、错误展示、SQLite/存储、作业筛选过滤、课程详情 Tab 及作业展示、课程表表头自适应/解耦/导出、课程表桌面端Tab半行自适应排版与窄屏滑动、课程表去网格框线、移动端课表尺寸精简与三行最多八字截断、秋/冬小学期分段过滤切换、右侧总览栏两行以内Tab自适应切换、秋/冬学期精准识别、课程表/日程点按弹出详情抽屉、课程详情上课时间/教室/教师元数据行、课程总览教师标注、移动端日程紧凑排版、设置页折叠展开、页面感知上下文与 API 指引、学业快览卡片直达与辅助栏学业统计、缓存请求合并、跨页面缓存通知和更新时间回归等；原生测试覆盖 Windows 安全存储和 SQLite，另有真实登录手工测试。
 
-最近验证记录（2026-09-12）：页面拆分和旧入口删除后，`flutter test --no-pub` 为 105 项全通过，`flutter analyze --no-pub` 为 `No issues found!`。新增的 `test/feature_page_lifecycle_test.dart` 覆盖入口 key 不变时的路由切换、作业分类参数、首次/手动刷新、缓存广播、本地下载页和 1320/800/390px 下的七个功能页渲染。之后的课表解析、刷新结束状态、辅助弹层同步和旧数据提示修复按用户要求未再运行测试或分析，不能把这一检查点当作后续修复已经验证。
+最近验证记录（2026-09-13）：依赖恢复和下载目录调用修复后，`flutter pub get` 成功，`flutter test --no-pub` 全量 126 项通过，`flutter analyze --no-pub` 输出 `No issues found!`，三者退出码均为 0。包含 `test/webvpn_test.dart` 的链接/AES 回归和 `test/storage_test.dart` 新增的目录切换、恢复默认、配置保留与原目录文件查找回归。随后 `flutter_window.cpp` 的 MSVC C4819/C2220 原生编译问题已通过保持源文件 ASCII 可表示修复，Windows 构建由用户确认成功；本轮没有重复构建。
+
+`flutter test integration_test/native_storage_test.dart -d windows --no-pub` 在链接阶段因正在运行的 Debug 客户端占用 EXE 而报 `LNK1168`，本次原生集成测试未完成。用户随后确认运行时问题已解决；这不等于原生集成测试或真实校园接口全量验收通过。
 
 每次修改 Flutter 业务代码，优先执行：
 
 ```bash
-cd apps/flutter
+
 flutter test
 flutter analyze
 ```
@@ -313,7 +327,7 @@ pnpm test
 - 刷新策略：页面首次进入由 `claimInitialRefresh(pageKey)` 控制一次强制刷新，手动刷新也强制绕过缓存；通知和校历已接入一天缓存。学校信息页不使用下拉刷新，但保留标题栏刷新按钮，并显示通知数据的更新时间。
 - 下载页例外：它是本地文件管理页面，不走数据页首次进入刷新、网络缓存和更新时间提示；不要为了统一页面外观给下载页添加网络刷新逻辑。
 - 退出登录：当前会取消 Agent 请求并重置校园会话，但没有统一取消 `FileService` 的活动下载；不能把退出登录描述成已中止所有后台文件传输。
-- 提示词资产：`apps/flutter/assets/prompts.json` 已存在并声明在 `pubspec.yaml`，包含 `SYSTEM_PROMPT_TPL`、`GUIDE_RULES`、`BRIEF_RULES`，普通测试已覆盖。若运行时仍提示加载失败，应优先检查构建产物中的资源打包路径和缓存，不要用空字符串 fallback 掩盖问题。
+- 提示词资产：`assets/prompts.json` 已存在并声明在 `pubspec.yaml`，包含 `SYSTEM_PROMPT_TPL`、`GUIDE_RULES`、`BRIEF_RULES`，普通测试已覆盖。若运行时仍提示加载失败，应优先检查构建产物中的资源打包路径和缓存，不要用空字符串 fallback 掩盖问题。
 - 响应式回归：本次扫描时尚未覆盖多宽度页面回归；后续 2026-09-12 的页面拆分已增加七个功能页在 1320/800/390px 下的渲染覆盖。设置、聊天窗、golden 和真机触控仍需继续验收。
 
 ### 12.2 2026-09-12 数据加载与页面联动
@@ -338,3 +352,10 @@ pnpm test
 - 页面和课程辅助栏刷新结束时显式更新状态；辅助弹层订阅 `overviewChanges`，同步数据 Future、学期、刷新状态和更新时间。
 - 工作台根据实际缓存依赖显示部分刷新失败提示。组合时间仍取最早的真实依赖时间，失败回退不推进成功时间。
 - 此阶段按用户要求未再运行测试、分析或手工验收；第 12.3 节的通过记录仅覆盖此前的页面拆分和旧入口删除。
+
+### 12.5 2026-09-13 编译修复与运行状态恢复
+
+- `pointycastle` 已在 `pubspec.yaml` 和 `pubspec.lock` 中声明；执行 `flutter pub get` 补齐本机包解析配置，解决 WebVPN 的包缺失及 `AESEngine` / `KeyParameter` 连带编译错误，未修改依赖版本或锁文件。
+- 修复合并后 `AppServices.applyDownloadDirectory` 对不存在的 `moveRoot` 的调用，改为委托 `FileService.setDownloadDirectory`，统一使用 `downloadDirectory` 配置字段和当前默认目录。
+- 针对字段改动后热重载保留旧 `FileService` 实例导致的 `_root` 空值异常，说明 Hot Restart/重新启动处理方式；用户反馈问题已解决，无需修改非空目录类型。
+- 自动检查与原生测试限制见第 11 节；历史 100/105 项检查点保留为阶段记录，当前最新全量普通测试为 126 项通过。

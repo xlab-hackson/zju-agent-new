@@ -27,6 +27,7 @@ pnpm-debug.log*
 .vscode/*
 !.vscode/extensions.json
 !.vscode/settings.json
+*.iml
 
 # OS
 .DS_Store
@@ -35,15 +36,15 @@ Thumbs.db
 # Local data (本地优先应用运行时数据，绝不入库)
 data/
 # Flutter's data layer is source code, not runtime data.
-!/apps/flutter/lib/data/
-!/apps/flutter/lib/data/*.dart
+!/lib/data/
+!/lib/data/*.dart
 *.db
 *.sqlite
 *.sqlite-journal
 downloads/
 # Download UI components are source code, not downloaded runtime files.
-!/apps/flutter/lib/ui/downloads/
-!/apps/flutter/lib/ui/downloads/*.dart
+!/lib/ui/downloads/
+!/lib/ui/downloads/*.dart
 
 # TypeScript
 *.tsbuildinfo
@@ -57,5 +58,18 @@ downloads/
 .flutter-plugins-dependencies
 **/android/local.properties
 **/android/.gradle/
+**/android/gradle/wrapper/gradle-wrapper.jar
+**/android/gradlew
+**/android/gradlew.bat
+**/android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java
+**/android/app/debug/
+**/android/app/profile/
+**/android/app/release/
 **/windows/flutter/ephemeral/
 foragent/
+
+# Flutter generated files
+/coverage/
+app.*.symbols
+app.*.map.json
+.widget_preview/
