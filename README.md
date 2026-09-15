@@ -34,7 +34,7 @@
 
 - Flutter >= 3.44
 - Dart >= 3.12
-- Windows 构建需要 Visual Studio 的 C++ 桌面开发工作负载和 Windows SDK。
+- Windows 构建需要 Visual Studio 的「使用 C++ 的桌面开发」工作负载、Windows SDK、**C++ ATL 组件**，并开启 **Windows 开发者模式**（插件符号链接）。详见 [Flutter 开发文档](docs/flutter.md#windows-环境要求)。
 - 依赖版本由 `pubspec.lock` 固定，该文件应随项目提交。
 
 ### 运行和检查
