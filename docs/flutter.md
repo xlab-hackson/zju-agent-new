@@ -17,7 +17,19 @@ flutter build windows --release
 flutter test integration_test/native_storage_test.dart -d windows
 ```
 
-Windows 发布时需要携带整个 `build/windows/x64/runner/Release` 目录，包括 DLL 和 data，不能只复制 exe。编译需要 Visual Studio C++ 桌面开发工作负载和 Windows SDK。
+Windows 发布时需要携带整个 `build/windows/x64/runner/Release` 目录，包括 DLL 和 data，不能只复制 exe。
+
+### Windows 环境要求
+
+除 Flutter >= 3.44、Dart >= 3.12 外，Windows 构建和运行还需要：
+
+- **Visual Studio 的「使用 C++ 的桌面开发」工作负载**，以及 **Windows SDK**。
+- **C++ ATL 组件**（Visual Studio Installer → 单个组件 → 「适用于最新生成工具的 C++ ATL」）。`flutter_secure_storage_windows` 无条件 `#include <atlstr.h>`，缺少该组件会在编译插件时报 `error C1083: 无法打开包括文件: "atlstr.h"`。
+- **Windows 开发者模式**：在 Windows 设置中搜索「开发者模式」并开启（也可执行 `start ms-settings:developers`）。Flutter 以符号链接把插件放进 `windows/flutter/ephemeral/.plugin_symlinks/`；未开启时 `flutter pub get` 会提示 `Building with plugins requires symlink support`，该目录保持为空，构建以退出码 1 失败。
+
+配置完成后按顺序执行 `flutter pub get` 和 `flutter run -d windows` 验证环境。
+
+Release 产物未签名。如果它被 Windows 的安全策略拦截（例如启用 Smart App Control 时，直接运行 `build/windows/x64/runner/Release/zju_campus_agent.exe` 会提示 `An Application Control policy has blocked this file`），这属于设备安全策略，不是构建失败，`flutter run -d windows` 的 Debug 链路不受影响；不建议为了运行本地未签名产物而关闭系统安全功能。
 
 ## 依赖维护
 

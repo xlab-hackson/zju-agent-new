@@ -45,7 +45,7 @@ flutter test tool/check_login_transport.dart
 flutter test integration_test/native_login_test.dart -d windows --dart-define=VERIFY_SAVED_CAMPUS_LOGIN=true
 ```
 
-Flutter 要求 Flutter >= 3.44、Dart >= 3.12。`pubspec.lock` 应提交。Windows 发布时必须保留完整的 `build/windows/x64/runner/Release`，包括 DLL 和 `data` 目录；本机需要 Visual Studio C++ Desktop workload 和 Windows SDK。
+Flutter 要求 Flutter >= 3.44、Dart >= 3.12。`pubspec.lock` 应提交。Windows 发布时必须保留完整的 `build/windows/x64/runner/Release`，包括 DLL 和 `data` 目录；本机需要 Visual Studio C++ Desktop workload、Windows SDK、C++ ATL 组件，并开启 Windows 开发者模式（插件符号链接）。完整要求见 [Flutter 开发文档](docs/flutter.md#windows-环境要求)。
 
 - 合并代码或依赖声明变化后先执行 `flutter pub get`，再使用 `--no-pub` 检查。`domain/webvpn.dart` 使用 `pointycastle` 4.0.0；若声明和锁文件已有该包但仍无法解析，应刷新本机 `.dart_tool/package_config.json`，不要手工修改生成文件或删掉加密实现。
 - 服务字段或构造初始化发生变化后，旧实例可能在热重载中保留。出现 `FileService._root` 为 null 的类型错误时，先执行 Hot Restart（`flutter run` 终端按大写 `R`）或停止后重新启动；不要为旧内存状态加入空目录兜底。详见 [Flutter 开发排错](docs/flutter.md#开发排错)。
